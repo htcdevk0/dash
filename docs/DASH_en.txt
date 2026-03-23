@@ -1,0 +1,342 @@
+Dash Programming Language™
+
+Official syntax and other documentation for the Dash Programming
+Language™.
+
+Made by: htcdevk0
+
+------------------------------------------------------------------------
+
+Overview:
+
+The Dash Programming Language™ aims to be a compiled programming
+language (LLVM) whose final binary must always be as portable as
+possible. The language seeks to function across all available
+architectures, including: - x86 / x86_64 - ARM / AArch64 - RISC-V
+(32/64) - WebAssembly (wasm32/wasm64) - GPU (NVPTX, AMDGPU) - Embedded
+(AVR, MSP430, Xtensa) - Others (MIPS, PowerPC, SystemZ, BPF, Hexagon,
+VE)
+
+The language offers libraries programmed in C (currently supporting 90%
+of GTK4) by making use of C FFI:
+
+    extern("c") <function name>(<params>): <return type>;
+
+It also possesses Dash FFI (for dynamic and static libraries):
+
+    extern <function name>(<params>): <return type>;
+
+It is very important to differentiate these two keywords, as each
+utilizes a different ABI (C & DASH).
+
+------------------------------------------------------------------------
+
+Types:
+
+The Dash Programming Language™ offers 6 different variable and function
+types, which are:
+
+    int      -> i32
+    uint     -> i64
+
+    float    -> float
+    double   -> double
+
+    bool     -> i1
+    char     -> i8
+
+    string   -> ptr (i8*)
+
+Each type has its specific uses and was designed to fit current
+standards without the need for explicit types like u8, i8, i16, etc.
+
+------------------------------------------------------------------------
+
+Variables:
+
+Variables in the Dash Programming Language have exposed mutability and
+typing; they feature lists and arrays for each type.
+
+Mutability: - let -> mutable - const -> immutable
+
+Declarations: - <mut> <name>: <type> = <value>;
+
+Example:
+
+    let x: int = 10;
+    let y: int = 20;
+    let xy: int = x + y;
+
+------------------------------------------------------------------------
+
+Modules:
+
+Modules in the Dash Programming Language™ are separated via classes or
+style imports. Standard libraries are separated by their name and their
+import:
+
+See: - Stdio: io.<func>(<param>); - Stdstr: str.<func>(<param>); -
+Stros: os.<func>(<param>); or system.<func>(<param>);
+
+IMPORTS:
+
+    import [std/io];
+    import [std/str];
+    import [std/os];
+    import [std/fs];
+
+All standard modules are created using static or dynamic implementations
+(Smart Linking) and they originate from: -
+/home/<user>/.dash/imports/<folder or module>
+
+Static objects come from: - /home/<user>/.dash/static/<lib<module>.o>
+
+Dynamic objects come from: - /home/<user>/.dash/lib/<lib<module>.so>
+
+You can access the STDLIB implementation repository at:
+https://github.com/htcdevk0/Dash-Language-STDLIB
+
+------------------------------------------------------------------------
+
+Smart linking:
+
+Smart Linking is the method of filtering static objects to dynamic ones
+at compile time using the Dash Programming Language™. See:
+
+    dash build <file.ds> -sl # Smart Linking
+
+It will search in the folder
+/home/<user>/.dash/lib/<lib<same static module name>.so>
+
+Diagram: > If the flag ‘-sl’ is used, search for functions in the static
+modules, compare the static module name… > Now search in the dynamic
+modules and compare the filenames; if they are the same, link the
+dynamic instead of the static.
+
+------------------------------------------------------------------------
+
+Groups:
+
+Groups in the Dash Programming Language™ are equivalent to:
+
+    typedef struct . . .
+
+in C.
+
+They function as a definition of vector types:
+
+    group Vec3 {
+        x: float,
+        y: float,
+        z: float
+    }
+
+    fn main(): int {
+        let pos: Vec3 = {1.0, 2.0, 1.0};
+        // Access
+        let posX: float = pos.x;
+        return 0;
+    }
+
+------------------------------------------------------------------------
+
+Lists and Arrays:
+
+Arrays are famous for storing data in a way where a single variable can
+carry several of them, but they suffer from being entirely static in
+most cases. Lists solve this by storing the same data but with
+mutability.
+
+Full Example:
+
+    import [std/io];
+
+    fn main() {
+        // A List is created when the array is let/mutable
+        let lista: string[/*optional max size*/] = {/*starts empty*/};
+        
+        // An Array is created when the variable is const and receives brackets
+        const array: string[/*optional max size*/] = {"ABC", "DEF", "GHI"};
+
+        // Add to the last index of the list
+        lista::push("ABC"); // Insere at the last available index
+        lista::push("DEF");
+        
+        // Remove
+        lista::rem(1); // Removes the content of the specified index
+        
+        // Now only index 0 with "ABC" remains
+        
+        // Insert
+        lista::insert(0, "DEF");
+        // Now index 0 is "DEF"
+        
+        io.println(lista[0]);
+        // Output: DEF
+        
+        // Array access:
+        io.println($"0: {array[0]}, 1: {array[1]}, 2: {array[2]}");
+    }
+
+------------------------------------------------------------------------
+
+Builtin Functions:
+
+Builtin functions in the Dash Programming Language™ are used with the
+symbol ::
+
+Example:
+
+    fn main(): int {
+        let list: string[] = {/*starts empty*/};
+        list::push("ABC"); // Pushes ABC at index 0 using the builtin function
+        return 0;
+    }
+
+------------------------------------------------------------------------
+
+Templates:
+
+Templates in the Dash Programming Language™ are implemented via builtin.
+
+    env <<target>, <param>> -> env<"target", "linux">
+        // Returns true if the operating system running the program matches the specified OS ("linux", "windows", "mac", "bsd", "unknown").
+
+    is<<type>, <var>> -> is<string, x>
+        // Returns true if the variable type matches the specified type.
+
+    exdt<var>
+        // Returns the data extracted from the variable.
+
+------------------------------------------------------------------------
+
+Pointers:
+
+Pointers in the Dash Programming Language™ are used in the same manner
+as the C language.
+
+Example:
+
+    fn main(): int {
+        let a: int = 10;
+        let aPtr: int* = &a;
+        // Create an integer pointer and receive the `a` address.
+        return 0;
+    }
+
+To send function pointers as parameters (usually with libraries imported
+via C FFI), it is done with:
+
+    function((function_thats_sends_the_pointer())); // It does NOT call the function!
+
+------------------------------------------------------------------------
+
+Classes:
+
+Classes in the Dash Programming Language™ are used with the keyword
+class and they possess the static type.
+
+Example:
+
+    class My_class {
+        let x: int;
+        let y: int->10; // The operator -> initializes the variable. `=` is not accepted!
+
+        fn getX(): int {
+            return self.x; // The keyword self searches for the variable or function inside the parent class
+        }
+
+        fn updateY(a: int): void {
+            self.y = a;
+        }
+    }
+
+    // Usage:
+    fn main(): int {
+        let my_class: My_class;
+        let x: int = my_class.getX();
+        my_class.updateY(20);
+    }
+
+Static classes:
+
+    class My_class: static {
+        let x: int;
+        let y: int->10; // The operator -> initializes the variable. `=` is not accepted!
+
+        fn getX(): int {
+            return self.x; 
+        }
+
+        fn updateY(a: int): void {
+            self.y = a;
+        }
+    }
+
+    // Usage:
+    fn main(): int {
+        let x: int = My_class.getX();
+        My_class.updateY(20);
+
+        // No instance needed
+    }
+
+------------------------------------------------------------------------
+
+String Interpolation:
+
+String interpolation is usable anywhere that accepts double quotes " by
+using $ before them and using {variable, function, method, operation} to
+insert values.
+
+Example:
+
+    fn retString(str: string): string {
+        return str;
+    }
+
+    fn main(): int {
+        const x: int = 10;
+        let str: string = $"X value: {x}";
+        retString($"X value: {x}");
+    }
+
+------------------------------------------------------------------------
+
+CLI:
+
+Usage: - dash <input.ds> [options] - dash build <input.ds> [options] -
+dash run <input.ds> [options]
+
+General: - --version, -v Show compiler version - --license, -lic Show
+license - --author, -aut Show author (htcdevk0)
+
+Build: - -o <path> Output path - --emit-llvm Emit LLVM IR (.ll) -
+-obj / -c Emit object file - --shared Build shared library
+(.so/.dll/.dylib) - --clang <path> Use custom clang for linking
+
+Linking: - -L=<profile> Extra link profile (e.g., gtk4) - -cl <file>
+Statically link object/archive - -ld<path> Add linker search directory -
+-l<name> Link native library
+
+Runtime: - -d Link shared libs from ~/.dash/lib - -sl Smart
+static/dynamic linking
+
+Native: - <file.so|.dll|.dylib|.a|.o> Add native object/library to link
+
+Repositories: - https://github.com/htcdevk0/dash -
+https://github.com/htcdevk0/Dash-Language-STDLIB
+
+------------------------------------------------------------------------
+
+License:
+
+The Dash Programming Language™ uses the GNU GPLv3 license, as do all of
+its other modules.
+
+------------------------------------------------------------------------
+
+Author:
+
+Currently, the Dash Programming Language™ is created and maintained by
+htcdevk0 (Brazilian Developer, Pietro De Paiva).
