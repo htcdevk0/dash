@@ -4,7 +4,7 @@ Official syntax and other documentation for the ***Dash Programming Language™*
 
 Made by: htcdevk0
 
-Doc Version: v1.1.0
+Doc Version: v1.1.1
 Dash Version: v4.1.1LL
 Dash Repository Version: v2.0.1
 
@@ -392,6 +392,7 @@ fn main(): int {
 **Repositories:**
 - [https://github.com/htcdevk0/dash](https://github.com/htcdevk0/dash)
 - [https://github.com/htcdevk0/Dash-Language-STDLIB](https://github.com/htcdevk0/Dash-Language-STDLIB)
+- [https://github.com/htcdevk0/dashtup](https://github.com/htcdevk0/dashtup)
 
 ---
 

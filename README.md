@@ -39,4 +39,8 @@ fn main(): int {
 }
 ```
 
+## How to install
+
+Check: https://github.com/htcdevk0/dashtup here you can find the dashtup binarie and install dash on your Linux.
+
 ### Check the docs/DASH_<language\>.md or .txt for the full documentation
