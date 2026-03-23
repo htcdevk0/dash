@@ -4,7 +4,7 @@ Official syntax and other documentation for the ***Dash Programming Language™*
 
 Made by: htcdevk0
 
-Doc Version: v1.1.1
+Doc Version: v2.0.0
 Dash Version: v4.1.1LL
 Dash Repository Version: v2.0.1
 
@@ -352,6 +352,147 @@ fn main(): int {
         io.println("Unknown color");
     }
     return 0;
+}
+```
+
+---
+
+## Loops:
+
+Loops in ***Dash Programming Language™*** are used to repeat code based on conditions or ranges.
+
+Dash supports:
+
+- for loops (range-based iteration)
+- while loops (condition-based)
+- do-while loops (runs at least once)
+
+**Example:**
+
+*For loop*
+```dash
+import [std/io];
+
+fn func(): void {
+    const arr: string[5] = {"ABC", "DEF", "GHI", "JKL", "MNO"};
+    for (let i: int = 0; i < 5; i++) {
+        io.println($"Array content: {arr[i]}");
+    }
+}
+
+fn main(): int {
+    func();
+    return 0;
+}
+```
+
+*While loop*
+```dash
+import [std/io];
+
+fn main(): int {
+    let n: int = 0;
+    while (n <= 50) {
+        n++;
+        io.println(n);
+    }
+    return 0;
+}
+```
+
+*Do While loop*
+```dash
+import [std/io];
+
+fn main(): int {
+    let choice: int = 1000;
+    do {
+        io.println("Enter your choice (0 quit, 1.. stay): ");
+        io.sinp(&choice);
+    } while (choice != 0);
+    return 0;
+}
+```
+
+---
+
+### Match
+
+```dash
+import [std/io];
+
+fn main(): int {
+    let number: int = 1000;
+
+    match (number) {
+        0..10 -> io.println("Between 0 and 10")
+        1000 -> io.println("Exactly 1000")
+        _ -> io.println("Other value")
+    }
+
+    return 0;
+}
+```
+
+---
+
+### Switch
+
+```dash
+import [std/io];
+
+fn main(): int {
+    let number: int = 1000;
+
+    switch (number) {
+        case 1:
+            io.println("One");
+            break;
+        case 2:
+            io.println("Two");
+            break;
+        default:
+            io.println("Other");
+            break;
+    }
+
+    return 0;
+}
+```
+
+---
+
+## Conditionals
+
+Conditionals in Dash are used to control program flow based on conditions.
+
+### Example
+
+```dash
+import [std/io];
+
+fn main(): int {
+    let value: int = 10;
+
+    if (value > 10) {
+        io.println("Greater than 10");
+    } else if (value == 10) {
+        io.println("Equal to 10");
+    } else {
+        io.println("Less than 10");
+    }
+
+    return 0;
+}
+```
+*Body:*
+```dash
+if (condition) {
+    // code
+} else if (condition) {
+    // code
+} else {
+    // code
 }
 ```
 
