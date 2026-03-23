@@ -4,6 +4,10 @@ Official syntax and other documentation for the ***Dash Programming Language™*
 
 Made by: htcdevk0
 
+Doc Version: v1.1.0
+Dash Version: v4.1.1LL
+Dash Repository Version: v1.1.0
+
 ---
 
 ## Overview:
@@ -306,6 +310,48 @@ fn main(): int {
     const x: int = 10;
     let str: string = $"X value: {x}";
     retString($"X value: {x}");
+}
+```
+
+---
+
+## Enums:
+
+Enums are used to standardize values in a clear and readable manner. In the ***Dash Programming Language™***, they can be utilized as follows:
+
+```dash
+enum <Enum_name> {
+    // Body
+    Content1,
+    Content2_With_Value = 1
+}
+```
+
+**Example:**
+
+```dash
+import [std/io];
+
+enum Colors {
+    RED = 1,
+    BLUE = 2,
+    GREEN = 3
+}
+
+fn main(): int {
+    let color: int;
+    io.print("Insert the color [RED = 1, GREEN = 2, BLUE = 3]: ");
+    io.sinp(&color);
+    if (color == Colors.RED) {
+        io.println("Red color!");
+    } else if (color == Colors.BLUE) {
+        io.println("Blue color!");
+    } else if (color == Colors.GREEN) {
+        io.println("Green color!");
+    } else {
+        io.println("Unknown color");
+    }
+    return 0;
 }
 ```
 
