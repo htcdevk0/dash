@@ -2,7 +2,7 @@
 
 Dash is a compiled programming language based on LLVM, designed for portability, small binaries, and low-level control.
 
-Version: v4.1.1LL, Repository Version: v2.0.1
+Version: v4.1.1LL, Repository Version: v2.0.2
 
 Patches:
 
@@ -41,6 +41,6 @@ fn main(): int {
 
 ## How to install
 
-Check: https://github.com/htcdevk0/dashtup here you can find the dashtup binarie and install dash on your Linux.
+Check: https://github.com/htcdevk0/dashtup here you can find the dashtup binary and install dash on your Linux.
 
 ### Check the docs/DASH_<language\>.md or .txt for the full documentation
