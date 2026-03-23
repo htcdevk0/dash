@@ -1,0 +1,41 @@
+import [gtk/gtk4/gtk];
+import [std/io];
+
+fn on_click(btn: uint, data: uint): void {
+    io.print("Clicked!\n");
+}
+
+fn on_activate(app_raw: uint, data: uint): void {
+    let app: gtk_app;
+    app.from_raw(app_raw);
+
+    let win: gtk_window;
+    win.init(app);
+    win.set_title("Dash GTK");
+    win.set_default_size(400, 200);
+
+    let box: gtk_box_widget;
+    box.init(GTK_ORIENTATION_VERTICAL, 10);
+
+    let label: gtk_label_widget;
+    label.init("Hello Dash");
+
+    let btn: gtk_button_widget;
+    btn.init_with_label("Click me");
+    btn.on_clicked((on_click()), 0);
+
+    box.append(label.ptr());
+    box.append(btn.ptr());
+
+    win.set_child(uint<box>);
+    win.present();
+}
+
+fn main(): int {
+    let app: gtk_app;
+    app.init("dash.app");
+
+    app.on_activate((on_activate()), 0);
+
+    return app.run();
+}

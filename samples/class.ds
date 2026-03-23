@@ -1,0 +1,27 @@
+import [std/io];
+
+class Car {
+    private let speed: int->240;
+    let price: int->300000;
+
+    // `->` initialize the variable value
+
+    fn getSpeed(): int {
+        return self.speed;
+    }
+
+    fn getPrice(): int {
+        return self.price;
+    }
+}
+
+fn main(): int {
+    let car: Car;
+
+    // Change the variables values
+    // car.speed = 100; error: field 'speed' is private in class 'Car'
+    // car.price = 10000; uncomment if you want
+
+    io.println($"Car, speed: {car.getSpeed()}, price: {car.getPrice()}"); // Public fields can be accessed directly (e.g., car.price)
+    return 0;
+}
