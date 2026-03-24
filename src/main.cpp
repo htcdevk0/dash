@@ -140,7 +140,13 @@ namespace
                     << "  "
                     << DIM << "https://github.com/" << RESET
                     << GREEN << "htcdevk0" << RESET << "/"
-                    << CYAN << "Dash-Language-STDLIB" << RESET << "\n";
+                    << CYAN << "dash-stdlib" << RESET << "\n"
+                    
+                    << "  "
+                    << DIM << "https://github.com/" << RESET
+                    << GREEN << "htcdevk0" << RESET << "/"
+                    << CYAN << "dashtup" << RESET << "\n";
+                    
                 std::exit(0);
             }
 
