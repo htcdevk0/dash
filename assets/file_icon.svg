@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="324 50 200 200" fill="none">
+  <defs>
+    <linearGradient id="textGrad" x1="355" y1="40" x2="1120" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E40AF"/>
+      <stop offset="60%" stop-color="#1D4ED8"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+
+    <filter id="textDepth" x="-6%" y="-8%" width="112%" height="120%">
+      <feOffset dy="1"/>
+      <feGaussianBlur stdDeviation="0.8" result="shadow"/>
+      <feColorMatrix
+        in="shadow"
+        type="matrix"
+        values="0 0 0 0 0.03
+                0 0 0 0 0.05
+                0 0 0 0 0.10
+                0 0 0 0.24 0"/>
+      <feBlend in="SourceGraphic" mode="normal"/>
+    </filter>
+  </defs>
+
+  <g transform="translate(355 30)" fill="url(#textGrad)" filter="url(#textDepth)">
+    <path fill-rule="evenodd" d="
+      M0 40H88L138 90V150L88 200H0V40Z
+      M34 74V166H74L104 138V102L74 74H34Z
+    "/>
+  </g>
+</svg>
