@@ -5,7 +5,7 @@ Language™.
 
 Made by: htcdevk0
 
-Doc Version: v2.0.0 Dash Version: v4.1.1LL Dash Repository Version:
+Doc Version: v2.0.1 Dash Version: v4.1.1LL Dash Repository Version:
 v2.0.1
 
 ------------------------------------------------------------------------
@@ -501,7 +501,7 @@ static/dynamic linking
 Native: - <file.so|.dll|.dylib|.a|.o> Add native object/library to link
 
 Repositories: - https://github.com/htcdevk0/dash -
-https://github.com/htcdevk0/Dash-Language-STDLIB -
+https://github.com/htcdevk0/dash-stdlib -
 https://github.com/htcdevk0/dashtup
 
 ------------------------------------------------------------------------
