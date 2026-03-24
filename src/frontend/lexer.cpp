@@ -46,7 +46,8 @@ namespace dash::frontend
                 {"match", TokenKind::KwMatch},
                 {"enum", TokenKind::KwEnum},
                 {"break", TokenKind::KwBreak},
-                {"export", TokenKind::KwExport}};
+                {"export", TokenKind::KwExport},
+                {"null", TokenKind::KwNull}};
 
             if (const auto it = keywords.find(text); it != keywords.end())
             {
@@ -141,6 +142,10 @@ namespace dash::frontend
             return "break";
         case TokenKind::KwExport:
             return "export";
+        case TokenKind::KwNull:
+            return "null";
+        case TokenKind::At:
+            return "@";
         case TokenKind::LParen:
             return "(";
         case TokenKind::RParen:
@@ -276,6 +281,9 @@ namespace dash::frontend
 
             switch (advance())
             {
+            case '@':
+                tokens.push_back(makeToken(TokenKind::At, "@", location));
+                break;
             case '(':
                 tokens.push_back(makeToken(TokenKind::LParen, "(", location));
                 break;

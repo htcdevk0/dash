@@ -25,7 +25,7 @@
 namespace
 {
 
-    constexpr const char *kDashVersion = "4.1.1LL";
+    constexpr const char *kDashVersion = "4.2.1LL";
 
     enum class CommandMode
     {

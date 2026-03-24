@@ -26,8 +26,9 @@ private:
     [[nodiscard]] const Token& expect(TokenKind kind, const std::string& message);
 
     [[nodiscard]] std::unique_ptr<ast::Decl> parseTopLevel();
+    [[nodiscard]] std::vector<ast::Annotation> parseAnnotations();
     [[nodiscard]] std::unique_ptr<ast::Decl> parseExternDecl(bool isPrivate);
-    [[nodiscard]] std::unique_ptr<ast::FunctionDecl> parseFunctionDecl(bool isExport = false);
+    [[nodiscard]] std::unique_ptr<ast::FunctionDecl> parseFunctionDecl(bool isExport = false, std::vector<ast::Annotation> annotations = {});
     [[nodiscard]] std::unique_ptr<ast::ClassDecl> parseClassDecl();
     [[nodiscard]] std::unique_ptr<ast::ClassDecl> parseGroupDecl();
     [[nodiscard]] std::unique_ptr<ast::EnumDecl> parseEnumDecl();
@@ -37,7 +38,7 @@ private:
     [[nodiscard]] core::TypeRef parseType();
     [[nodiscard]] std::vector<ast::FieldDecl> parseClassFields(bool isPrivate, bool isMutable);
     [[nodiscard]] ast::FieldDecl parseGroupField();
-    [[nodiscard]] ast::MemberFunctionDecl parseClassMethod(bool isPrivate);
+    [[nodiscard]] ast::MemberFunctionDecl parseClassMethod(bool isPrivate, std::vector<ast::Annotation> annotations = {});
     void parseClassExternMember(ast::ClassDecl& decl, bool isPrivate);
 
     [[nodiscard]] std::unique_ptr<ast::BlockStmt> parseBlock();

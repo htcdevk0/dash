@@ -49,7 +49,9 @@ enum class TokenKind {
     KwEnum,
     KwBreak,
     KwExport,
+    KwNull,
 
+    At,
     LParen,
     RParen,
     LBrace,

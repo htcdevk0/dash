@@ -57,6 +57,32 @@ namespace dash::sema
             return currentClass != nullptr && currentClass->name == targetClass.name;
         }
 
+        [[nodiscard]] bool hasAnnotation(const std::vector<ast::Annotation> &annotations, const std::string &name)
+        {
+            for (const auto &ann : annotations)
+                if (ann.name == name)
+                    return true;
+            return false;
+        }
+
+        [[nodiscard]] std::string annotationArgument(const std::vector<ast::Annotation> &annotations, const std::string &name)
+        {
+            for (const auto &ann : annotations)
+                if (ann.name == name)
+                    return ann.argument;
+            return {};
+        }
+
+        void emitFunctionWarnings(const core::SourceLocation &location, const std::string &name, bool deprecated, bool risky, const std::string &customWarning)
+        {
+            if (deprecated)
+                core::emitWarning(location, "call to deprecated function '" + name + "'");
+            if (risky)
+                core::emitWarning(location, "call to risky function '" + name + "'");
+            if (!customWarning.empty())
+                core::emitWarning(location, customWarning);
+        }
+
     }
 
     void Analyzer::analyze(ast::Program &program)
@@ -172,13 +198,13 @@ namespace dash::sema
                     const std::string privateKey = externDecl->location.file + "::" + externDecl->name;
                     if (privateFunctions_.contains(privateKey))
                         core::throwDiagnostic(externDecl->location, "duplicate private function declaration in same file: " + externDecl->name);
-                    privateFunctions_.emplace(privateKey, FunctionSymbol{externDecl->name, externDecl->parameters, externDecl->returnType, true, true, externDecl->location.file});
+                    privateFunctions_.emplace(privateKey, FunctionSymbol{externDecl->name, externDecl->parameters, externDecl->returnType, true, true, externDecl->location.file, false, false, {}});
                     continue;
                 }
 
                 if (functions_.contains(externDecl->name))
                     core::throwDiagnostic(externDecl->location, "duplicate function declaration: " + externDecl->name);
-                functions_.emplace(externDecl->name, FunctionSymbol{externDecl->name, externDecl->parameters, externDecl->returnType, true, false, externDecl->location.file});
+                functions_.emplace(externDecl->name, FunctionSymbol{externDecl->name, externDecl->parameters, externDecl->returnType, true, false, externDecl->location.file, false, false, {}});
                 continue;
             }
             if (auto *function = dynamic_cast<ast::FunctionDecl *>(decl.get()))
@@ -187,7 +213,7 @@ namespace dash::sema
                     core::throwDiagnostic(function->location, "duplicate function declaration: " + function->name);
                 if (function->name == "main")
                     validateMainSignature(*function);
-                functions_.emplace(function->name, FunctionSymbol{function->name, function->parameters, function->returnType, false, false, function->location.file});
+                functions_.emplace(function->name, FunctionSymbol{function->name, function->parameters, function->returnType, false, false, function->location.file, hasAnnotation(function->annotations, "Deprecated"), hasAnnotation(function->annotations, "Risky"), annotationArgument(function->annotations, "Warning")});
             }
         }
     }
@@ -615,6 +641,8 @@ namespace dash::sema
             return expr.inferredType = (literal->forceUnsigned ? core::TypeRef{core::BuiltinTypeKind::UInt, ""} : core::TypeRef{core::BuiltinTypeKind::Int, ""});
         if (dynamic_cast<ast::DoubleLiteralExpr *>(&expr) != nullptr)
             return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Double, ""};
+        if (dynamic_cast<ast::NullLiteralExpr *>(&expr) != nullptr)
+            return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Unknown, ""};
         if (dynamic_cast<ast::BoolLiteralExpr *>(&expr) != nullptr)
             return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Bool, ""};
         if (dynamic_cast<ast::StringLiteralExpr *>(&expr) != nullptr)
@@ -802,6 +830,7 @@ namespace dash::sema
             const auto *decl = it->second;
             if (decl->isPrivate && !canAccessPrivateMember(currentClass_, klass))
                 core::throwDiagnostic(method->location, "method '" + method->method + "' is private in class '" + klass.name + "'");
+            emitFunctionWarnings(method->location, method->method, hasAnnotation(decl->annotations, "Deprecated"), hasAnnotation(decl->annotations, "Risky"), annotationArgument(decl->annotations, "Warning"));
             const bool variadic = !decl->parameters.empty() && decl->parameters.back().isVariadic;
             const std::size_t fixedCount = variadic ? decl->parameters.size() - 1 : decl->parameters.size();
             std::size_t variadicForwardIndex = static_cast<std::size_t>(-1);
@@ -1035,6 +1064,7 @@ namespace dash::sema
         if (auto *call = dynamic_cast<ast::CallExpr *>(&expr))
         {
             const auto &function = requireFunction(call->callee, call->location);
+            emitFunctionWarnings(call->location, call->callee, function.deprecated, function.risky, function.customWarning);
             const bool variadic = !function.parameters.empty() && function.parameters.back().isVariadic;
             const std::size_t fixedCount = variadic ? function.parameters.size() - 1 : function.parameters.size();
             std::size_t variadicForwardIndex = static_cast<std::size_t>(-1);

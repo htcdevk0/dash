@@ -14,6 +14,9 @@ struct FunctionSymbol {
     bool isExtern {false};
     bool isPrivate {false};
     std::string sourceFile;
+    bool deprecated {false};
+    bool risky {false};
+    std::string customWarning;
 };
 
 struct VariableSymbol {

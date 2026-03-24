@@ -29,6 +29,12 @@ struct Decl : Node {
     virtual ~Decl() = default;
 };
 
+struct Annotation {
+    std::string name;
+    std::string argument;
+    core::SourceLocation location;
+};
+
 struct Parameter {
     std::string name;
     core::TypeRef type {};
@@ -61,6 +67,9 @@ struct InterpolatedStringExpr final : Expr {
 
 struct CharLiteralExpr final : Expr {
     std::uint8_t value {0};
+};
+
+struct NullLiteralExpr final : Expr {
 };
 
 struct ExtractDataExpr final : Expr {
@@ -222,6 +231,7 @@ struct FunctionDecl final : Decl {
     core::TypeRef returnType {};
     std::unique_ptr<BlockStmt> body;
     bool isExport {false};
+    std::vector<Annotation> annotations;
 };
 
 struct GlobalVarDecl final : Decl {
@@ -267,6 +277,7 @@ struct MemberFunctionDecl {
     bool isExtern {false};
     std::string abi;
     core::SourceLocation location;
+    std::vector<Annotation> annotations;
 };
 
 struct ClassDecl final : Decl {

@@ -301,11 +301,36 @@ namespace dash::frontend
         }
         return advance();
     }
+    std::vector<ast::Annotation> Parser::parseAnnotations()
+    {
+        std::vector<ast::Annotation> annotations;
+        while (match(TokenKind::At))
+        {
+            ast::Annotation ann;
+            ann.location = previous().location;
+            ann.name = expect(TokenKind::Identifier, "expected annotation name after '@'").lexeme;
+            if (match(TokenKind::LParen))
+            {
+                if (!check(TokenKind::RParen))
+                {
+                    ann.argument = expect(TokenKind::StringLiteral, "expected string literal annotation argument").lexeme;
+                }
+                (void)expect(TokenKind::RParen, "expected ')' after annotation arguments");
+            }
+            annotations.push_back(std::move(ann));
+        }
+        return annotations;
+    }
+
 
     std::unique_ptr<ast::Decl> Parser::parseTopLevel()
     {
+        auto annotations = parseAnnotations();
+
         if (match(TokenKind::KwPrivate))
         {
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             if (!match(TokenKind::KwExtern))
             {
                 core::throwDiagnostic(current().location, "expected extern after private");
@@ -315,16 +340,20 @@ namespace dash::frontend
 
         if (match(TokenKind::KwExtern))
         {
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             return parseExternDecl(false);
         }
         if (match(TokenKind::KwFn))
         {
-            return parseFunctionDecl();
+            return parseFunctionDecl(false, std::move(annotations));
         }
         if (match(TokenKind::KwExport))
         {
             if (match(TokenKind::KwFn))
-                return parseFunctionDecl(true);
+                return parseFunctionDecl(true, std::move(annotations));
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             if (match(TokenKind::KwLet))
                 return parseGlobalVarDecl(true, true);
             if (match(TokenKind::KwConst))
@@ -333,22 +362,32 @@ namespace dash::frontend
         }
         if (match(TokenKind::KwClass))
         {
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             return parseClassDecl();
         }
         if (match(TokenKind::KwGroup))
         {
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             return parseGroupDecl();
         }
         if (match(TokenKind::KwEnum))
         {
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             return parseEnumDecl();
         }
         if (match(TokenKind::KwLet))
         {
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             return parseGlobalVarDecl(true);
         }
         if (match(TokenKind::KwConst))
         {
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             return parseGlobalVarDecl(false);
         }
         core::throwDiagnostic(current().location, "expected top-level declaration");
@@ -420,14 +459,24 @@ namespace dash::frontend
         return decl;
     }
 
-    std::unique_ptr<ast::FunctionDecl> Parser::parseFunctionDecl(bool isExport)
+    std::unique_ptr<ast::FunctionDecl> Parser::parseFunctionDecl(bool isExport, std::vector<ast::Annotation> annotations)
     {
         auto decl = std::make_unique<ast::FunctionDecl>();
         decl->location = previous().location;
         decl->isExport = isExport;
+        decl->annotations = std::move(annotations);
 
         const auto &name = expect(TokenKind::Identifier, "expected function name");
         decl->name = name.lexeme;
+        for (const auto &ann : decl->annotations)
+        {
+            if (ann.name == "Namespace")
+            {
+                if (ann.argument.empty())
+                    core::throwDiagnostic(ann.location, "@Namespace requires a non-empty string argument");
+                decl->name = ann.argument + "::" + decl->name;
+            }
+        }
         (void)expect(TokenKind::LParen, "expected '(' after function name");
         if (!check(TokenKind::RParen))
         {
@@ -466,17 +515,22 @@ namespace dash::frontend
         (void)expect(TokenKind::LBrace, "expected '{' to start class body");
         while (!check(TokenKind::RBrace) && !atEnd())
         {
+            auto annotations = parseAnnotations();
             const bool isPrivate = match(TokenKind::KwPrivate);
             if (match(TokenKind::KwExtern))
             {
+                if (!annotations.empty())
+                    core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
                 parseClassExternMember(*decl, isPrivate);
                 continue;
             }
             if (match(TokenKind::KwFn))
             {
-                decl->methods.push_back(parseClassMethod(isPrivate));
+                decl->methods.push_back(parseClassMethod(isPrivate, std::move(annotations)));
                 continue;
             }
+            if (!annotations.empty())
+                core::throwDiagnostic(current().location, "annotations can only be applied to methods inside classes");
             if (match(TokenKind::KwLet) || match(TokenKind::KwConst))
             {
                 const bool isMutable = previous().kind == TokenKind::KwLet;
@@ -565,6 +619,8 @@ namespace dash::frontend
             if (match(TokenKind::Assign))
             {
                 initializer = parseExpression();
+                if (dynamic_cast<ast::NullLiteralExpr *>(initializer.get()) != nullptr)
+                    initializer.reset();
             }
             else if (type.kind == core::BuiltinTypeKind::Unknown)
             {
@@ -701,7 +757,7 @@ namespace dash::frontend
             field.name = name.lexeme;
             field.type = parseType();
             if (match(TokenKind::Arrow))
-                field.initializer = parseExpression().release();
+                { auto __tmpInit = parseExpression(); if (dynamic_cast<ast::NullLiteralExpr *>(__tmpInit.get()) == nullptr) field.initializer = __tmpInit.release(); }
             fields.push_back(field);
             if (!match(TokenKind::Comma))
                 break;
@@ -722,10 +778,11 @@ namespace dash::frontend
         return field;
     }
 
-    ast::MemberFunctionDecl Parser::parseClassMethod(bool isPrivate)
+    ast::MemberFunctionDecl Parser::parseClassMethod(bool isPrivate, std::vector<ast::Annotation> annotations)
     {
         ast::MemberFunctionDecl method;
         method.isPrivate = isPrivate;
+        method.annotations = std::move(annotations);
         method.location = previous().location;
         method.name = expect(TokenKind::Identifier, "expected method name").lexeme;
         (void)expect(TokenKind::LParen, "expected ( after method name");
@@ -736,6 +793,11 @@ namespace dash::frontend
         (void)expect(TokenKind::RParen, "expected ) after parameter list");
         (void)expect(TokenKind::Colon, "expected : before return type");
         method.returnType = parseType();
+        for (const auto &ann : method.annotations)
+        {
+            if (ann.name == "Namespace")
+                core::throwDiagnostic(ann.location, "@Namespace is not allowed on class methods");
+        }
         method.body = parseBlock();
         return method;
     }
@@ -1244,6 +1306,8 @@ namespace dash::frontend
             if (match(TokenKind::Assign))
             {
                 initializer = parseExpression();
+                if (dynamic_cast<ast::NullLiteralExpr *>(initializer.get()) != nullptr)
+                    initializer.reset();
             }
             else if (type.kind == core::BuiltinTypeKind::Unknown)
             {
@@ -1679,6 +1743,12 @@ namespace dash::frontend
             node->value = previous().kind == TokenKind::KwTrue;
             expr = std::move(node);
         }
+        else if (match(TokenKind::KwNull))
+        {
+            auto node = std::make_unique<ast::NullLiteralExpr>();
+            node->location = previous().location;
+            expr = std::move(node);
+        }
         else if (match(TokenKind::KwIs))
         {
             const auto loc = previous().location;
@@ -1860,6 +1930,26 @@ namespace dash::frontend
                     remExpr->index = parseExpression();
                     (void)expect(TokenKind::RParen, "expected ')' after ::rem arguments");
                     expr = std::move(remExpr);
+                    continue;
+                }
+                if (auto *var = dynamic_cast<ast::VariableExpr *>(expr.get()))
+                {
+                    const std::string qualified = var->name + "::" + field.lexeme;
+                    if (match(TokenKind::LParen))
+                    {
+                        auto call = std::make_unique<ast::CallExpr>();
+                        call->location = field.location;
+                        call->callee = qualified;
+                        if (!check(TokenKind::RParen))
+                            call->arguments = parseArgumentList();
+                        (void)expect(TokenKind::RParen, "expected ')' after call arguments");
+                        expr = std::move(call);
+                        continue;
+                    }
+                    auto namespaced = std::make_unique<ast::VariableExpr>();
+                    namespaced->location = field.location;
+                    namespaced->name = qualified;
+                    expr = std::move(namespaced);
                     continue;
                 }
                 core::throwDiagnostic(field.location, "unknown '::' property or method");

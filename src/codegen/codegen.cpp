@@ -2047,6 +2047,10 @@ namespace dash::codegen
         {
             return emitArrayLiteralValue(*array, expr.inferredType);
         }
+        if (dynamic_cast<const ast::NullLiteralExpr *>(&expr) != nullptr)
+        {
+            return llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0, false);
+        }
         if (const auto *extract = dynamic_cast<const ast::ExtractDataExpr *>(&expr))
         {
             const auto operandType = extract->operand->inferredType;

@@ -4,9 +4,9 @@ Official syntax and other documentation for the ***Dash Programming Language™*
 
 Made by: htcdevk0
 
-Doc Version: v2.0.1
+Doc Version: v3.0.0
 Dash Version: v4.1.1LL
-Dash Repository Version: v2.0.3
+Dash Repository Version: v2.0.4
 
 ---
 
@@ -493,6 +493,101 @@ if (condition) {
     // code
 } else {
     // code
+}
+```
+
+---
+
+### `use`:
+
+The `use` keyword allows you to access functions, classes, variables,
+and other symbols from a module **without importing the entire
+module**.\
+This mechanism is designed to prevent **cyclic imports** and reduce
+unnecessary module dependencies during compilation.
+
+Instead of loading the full module into scope, `use` selectively exposes
+only the requested symbols.
+
+**Example:**
+
+``` dash
+use [std/io] {io}; // accesses only the 'io' class from std/io
+
+fn main(): int {
+    io.println("Hello, World");
+    return 0;
+}
+```
+
+**Forms:**
+
+``` dash
+use [module] {symbol1, symbol2}; // selective symbols
+use [module] {*};               // all symbols (full exposure)
+use "./local" {symbol};        // local module access
+```
+
+**Behavior:** - Does not perform a full module import - Avoids cyclic
+dependency issues - Reduces compile-time overhead - Provides
+fine-grained control over symbol visibility
+
+------------------------------------------------------------------------
+
+### Annotations:
+
+Annotations are an advanced feature that provide **additional metadata
+and compile-time control** over functions (and potentially other
+constructs).\
+They do not directly affect runtime behavior but influence compiler
+diagnostics and symbol organization.
+
+Currently supported annotations:
+
+``` dash
+@Namespace("namespace_here")
+<function>
+    - Assigns the function to a namespace.
+    - The function must be accessed using: namespace::function();
+
+@Deprecated
+<function>
+    - Emits a compile-time warning when the function is used.
+    - Indicates that the function is outdated and may be removed in future versions.
+
+@Risky
+<function>
+    - Emits a compile-time warning indicating that the function may be unsafe,
+      unstable, or prone to errors.
+
+@Warning("warning here")
+<function>
+    - Emits a custom compile-time warning message when the function is used.
+```
+
+**Example:**
+
+``` dash
+@Namespace("math")
+fn add(a: int, b: int): int {
+    return a + b;
+}
+
+@Deprecated
+fn oldFunc(): void {}
+
+@Risky
+fn unstable(): void {}
+
+@Warning("This function is experimental")
+fn experimental(): void {}
+
+fn main(): int {
+    math::add(2, 3);
+    oldFunc();
+    unstable();
+    experimental();
+    return 0;
 }
 ```
 
