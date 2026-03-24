@@ -34,7 +34,7 @@ namespace dash::codegen
     namespace
     {
 
-        constexpr const char *kDashArtifactSignature = "Built with Dash Programming Language (Dash 4.1.0LL) | htcdevk0";
+        constexpr const char *kDashArtifactSignature = "Built with Dash Programming Language (Dash 5.0.0LL) | htcdevk0";
 
         [[nodiscard]] std::string escapeString(const std::string &value)
         {

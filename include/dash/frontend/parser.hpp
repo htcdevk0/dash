@@ -26,6 +26,8 @@ private:
     [[nodiscard]] const Token& expect(TokenKind kind, const std::string& message);
 
     [[nodiscard]] std::unique_ptr<ast::Decl> parseTopLevel();
+    void parseNamespaceBlock();
+    void qualifyDeclaration(ast::Decl &decl);
     [[nodiscard]] std::vector<ast::Annotation> parseAnnotations();
     [[nodiscard]] std::unique_ptr<ast::Decl> parseExternDecl(bool isPrivate);
     [[nodiscard]] std::unique_ptr<ast::FunctionDecl> parseFunctionDecl(bool isExport = false, std::vector<ast::Annotation> annotations = {});
@@ -77,6 +79,7 @@ private:
     std::size_t index_ {0};
     std::deque<std::unique_ptr<ast::Decl>> pendingDeclarations_;
     std::unordered_set<std::string> knownTypeNames_;
+    std::vector<std::string> namespaceStack_;
 };
 
 } // namespace dash::frontend

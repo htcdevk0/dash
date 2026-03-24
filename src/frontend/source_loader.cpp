@@ -61,6 +61,10 @@ namespace dash::frontend
                 {
                     core::throwDiagnostic(location, "empty symbol in use list");
                 }
+                if (symbol.find("::") != std::string::npos)
+                {
+                    core::throwDiagnostic(location, "use cannot import nested namespace selectors; import the top-level namespace instead");
+                }
                 result.push_back(std::move(symbol));
             }
             return result;
@@ -255,6 +259,7 @@ namespace dash::frontend
             auto useProgram = useParser.parseProgram();
 
             std::unordered_set<std::string> remaining(use.symbols.begin(), use.symbols.end());
+            std::unordered_set<std::string> resolvedNamespaces;
             for (auto &decl : useProgram->declarations)
             {
                 const auto name = declName(*decl);
@@ -262,11 +267,37 @@ namespace dash::frontend
                 {
                     continue;
                 }
-                if (use.importAll || remaining.contains(name))
+
+                bool selected = use.importAll || remaining.contains(name);
+                std::string matchedNamespace;
+                if (!selected)
+                {
+                    for (const auto &symbol : use.symbols)
+                    {
+                        const std::string prefix = symbol + "::";
+                        if (name.rfind(prefix, 0) == 0)
+                        {
+                            selected = true;
+                            matchedNamespace = symbol;
+                            break;
+                        }
+                    }
+                }
+
+                if (selected)
                 {
                     combined->declarations.push_back(std::move(decl));
-                    remaining.erase(name);
+                    if (!matchedNamespace.empty())
+                        resolvedNamespaces.insert(matchedNamespace);
+                    else
+                        remaining.erase(name);
                 }
+            }
+
+            if (!use.importAll)
+            {
+                for (const auto &ns : resolvedNamespaces)
+                    remaining.erase(ns);
             }
 
             if (!use.importAll && !remaining.empty())

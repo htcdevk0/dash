@@ -1,0 +1,14 @@
+import [std/io];
+
+namespace "math" {
+    namespace "sum" {
+        fn add(n: int, z: int): int {
+            return n + z;
+        }
+    }
+}
+
+fn main(): int {
+    io.println(math::sum::add(10, 20));
+    return 0;
+}

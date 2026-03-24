@@ -47,7 +47,8 @@ namespace dash::frontend
                 {"enum", TokenKind::KwEnum},
                 {"break", TokenKind::KwBreak},
                 {"export", TokenKind::KwExport},
-                {"null", TokenKind::KwNull}};
+                {"null", TokenKind::KwNull},
+                {"namespace", TokenKind::KwNamespace}};
 
             if (const auto it = keywords.find(text); it != keywords.end())
             {
@@ -144,6 +145,8 @@ namespace dash::frontend
             return "export";
         case TokenKind::KwNull:
             return "null";
+        case TokenKind::KwNamespace:
+            return "namespace";
         case TokenKind::At:
             return "@";
         case TokenKind::LParen:

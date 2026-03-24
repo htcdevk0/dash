@@ -4,9 +4,45 @@ Official syntax and other documentation for the ***Dash Programming Language™*
 
 Made by: htcdevk0
 
-Doc Version: v3.0.0
-Dash Version: v4.1.1LL
-Dash Repository Version: v2.0.4
+Doc Version: v3.1.0
+Dash Version: v5.0.0LL
+Dash Repository Version: v2.0.5
+
+---
+
+## Get-started
+
+To start using the ***Dash Programming Language™***, it is necessary to download and install the language. This can be done using *dashtup* or by manually compiling the binary and the standard library.
+
+**Dashtup**:
+
+- Access the official *dashtup* repository: https://github.com/htcdevk0/dashtup
+- Download the installer release.
+- Execute the installer with:
+
+```bash
+chmod +x ./dashtup
+sudo ./dashtup install
+```
+
+* After installation, test the following code:
+
+main.ds:
+
+```dash
+import [std/io];
+
+fn main(): int {
+    io.println("Hello, World!");
+    return 0;
+}
+```
+
+Run:
+
+```bash
+dash run main.ds # Or use build if you want to execute the final binary directly
+```
 
 ---
 
@@ -416,7 +452,7 @@ fn main(): int {
 
 ---
 
-### Match
+## Match:
 
 ```dash
 import [std/io];
@@ -436,7 +472,7 @@ fn main(): int {
 
 ---
 
-### Switch
+## Switch:
 
 ```dash
 import [std/io];
@@ -462,11 +498,11 @@ fn main(): int {
 
 ---
 
-## Conditionals
+## Conditionals:
 
 Conditionals in Dash are used to control program flow based on conditions.
 
-### Example
+**Example:**
 
 ```dash
 import [std/io];
@@ -498,7 +534,7 @@ if (condition) {
 
 ---
 
-### `use`:
+## `use`:
 
 The `use` keyword allows you to access functions, classes, variables,
 and other symbols from a module **without importing the entire
@@ -534,7 +570,7 @@ fine-grained control over symbol visibility
 
 ------------------------------------------------------------------------
 
-### Annotations:
+## Annotations:
 
 Annotations are an advanced feature that provide **additional metadata
 and compile-time control** over functions (and potentially other
@@ -545,11 +581,6 @@ diagnostics and symbol organization.
 Currently supported annotations:
 
 ``` dash
-@Namespace("namespace_here")
-<function>
-    - Assigns the function to a namespace.
-    - The function must be accessed using: namespace::function();
-
 @Deprecated
 <function>
     - Emits a compile-time warning when the function is used.
@@ -568,11 +599,6 @@ Currently supported annotations:
 **Example:**
 
 ``` dash
-@Namespace("math")
-fn add(a: int, b: int): int {
-    return a + b;
-}
-
 @Deprecated
 fn oldFunc(): void {}
 
@@ -583,10 +609,35 @@ fn unstable(): void {}
 fn experimental(): void {}
 
 fn main(): int {
-    math::add(2, 3);
     oldFunc();
     unstable();
     experimental();
+    return 0;
+}
+```
+
+---
+
+## Namespaces
+
+Namespaces in Dash are used to organize code in a clean, structured, and scalable way.
+They help avoid naming conflicts and can be used as an alternative to classes for logical grouping and hierarchy.
+
+**Example:**
+
+```dash
+import [std/io];
+
+namespace "math" {
+    namespace "sum" {
+        fn add(n: int, z: int): int {
+            return n + z;
+        }
+    }
+}
+
+fn main(): int {
+    io.println(math::sum::add(10, 20));
     return 0;
 }
 ```

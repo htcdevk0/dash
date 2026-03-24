@@ -50,6 +50,7 @@ enum class TokenKind {
     KwBreak,
     KwExport,
     KwNull,
+    KwNamespace,
 
     At,
     LParen,

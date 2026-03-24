@@ -322,6 +322,131 @@ namespace dash::frontend
         return annotations;
     }
 
+    void Parser::qualifyDeclaration(ast::Decl &decl)
+    {
+        if (namespaceStack_.empty())
+            return;
+
+        std::string prefix;
+        for (std::size_t i = 0; i < namespaceStack_.size(); ++i)
+        {
+            if (i != 0)
+                prefix += "::";
+            prefix += namespaceStack_[i];
+        }
+
+        if (auto *fn = dynamic_cast<ast::FunctionDecl *>(&decl))
+        {
+            fn->name = prefix + "::" + fn->name;
+            return;
+        }
+        if (auto *ext = dynamic_cast<ast::ExternDecl *>(&decl))
+        {
+            ext->name = prefix + "::" + ext->name;
+            return;
+        }
+        if (auto *global = dynamic_cast<ast::GlobalVarDecl *>(&decl))
+        {
+            global->name = prefix + "::" + global->name;
+            return;
+        }
+    }
+
+    void Parser::parseNamespaceBlock()
+    {
+        const auto &nameToken = expect(TokenKind::StringLiteral, "expected namespace name string");
+        if (nameToken.lexeme.empty())
+            core::throwDiagnostic(nameToken.location, "namespace name cannot be empty");
+
+        namespaceStack_.push_back(nameToken.lexeme);
+        (void)expect(TokenKind::LBrace, "expected '{' to start namespace body");
+
+        while (!check(TokenKind::RBrace) && !atEnd())
+        {
+            auto annotations = parseAnnotations();
+
+            if (match(TokenKind::KwNamespace))
+            {
+                if (!annotations.empty())
+                    core::throwDiagnostic(annotations.front().location, "annotations cannot be applied to namespace blocks");
+                parseNamespaceBlock();
+                continue;
+            }
+
+            std::unique_ptr<ast::Decl> decl;
+
+            if (match(TokenKind::KwPrivate))
+            {
+                if (!annotations.empty())
+                    core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
+                if (!match(TokenKind::KwExtern))
+                    core::throwDiagnostic(current().location, "expected extern after private");
+                decl = parseExternDecl(true);
+            }
+            else if (match(TokenKind::KwExtern))
+            {
+                if (!annotations.empty())
+                    core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
+                decl = parseExternDecl(false);
+            }
+            else if (match(TokenKind::KwFn))
+            {
+                decl = parseFunctionDecl(false, std::move(annotations));
+            }
+            else if (match(TokenKind::KwExport))
+            {
+                if (match(TokenKind::KwFn))
+                    decl = parseFunctionDecl(true, std::move(annotations));
+                else if (match(TokenKind::KwLet))
+                {
+                    if (!annotations.empty())
+                        core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
+                    decl = parseGlobalVarDecl(true, true);
+                }
+                else if (match(TokenKind::KwConst))
+                {
+                    if (!annotations.empty())
+                        core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
+                    decl = parseGlobalVarDecl(false, true);
+                }
+                else
+                    core::throwDiagnostic(current().location, "expected fn, let or const after export inside namespace");
+            }
+            else if (match(TokenKind::KwLet))
+            {
+                if (!annotations.empty())
+                    core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
+                decl = parseGlobalVarDecl(true);
+            }
+            else if (match(TokenKind::KwConst))
+            {
+                if (!annotations.empty())
+                    core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
+                decl = parseGlobalVarDecl(false);
+            }
+            else if (check(TokenKind::KwClass) || check(TokenKind::KwGroup))
+            {
+                core::throwDiagnostic(current().location, "classes and groups are not allowed inside namespaces");
+            }
+            else if (check(TokenKind::KwEnum))
+            {
+                core::throwDiagnostic(current().location, "enums are not allowed inside namespaces");
+            }
+            else
+            {
+                core::throwDiagnostic(current().location, "expected namespace declaration");
+            }
+
+            if (decl != nullptr)
+            {
+                qualifyDeclaration(*decl);
+                pendingDeclarations_.push_back(std::move(decl));
+            }
+        }
+
+        (void)expect(TokenKind::RBrace, "expected '}' to close namespace body");
+        namespaceStack_.pop_back();
+    }
 
     std::unique_ptr<ast::Decl> Parser::parseTopLevel()
     {
@@ -343,6 +468,17 @@ namespace dash::frontend
             if (!annotations.empty())
                 core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
             return parseExternDecl(false);
+        }
+        if (match(TokenKind::KwNamespace))
+        {
+            if (!annotations.empty())
+                core::throwDiagnostic(previous().location, "annotations cannot be applied to namespace blocks");
+            parseNamespaceBlock();
+            if (pendingDeclarations_.empty())
+                core::throwDiagnostic(previous().location, "namespace block cannot be empty");
+            auto out = std::move(pendingDeclarations_.front());
+            pendingDeclarations_.pop_front();
+            return out;
         }
         if (match(TokenKind::KwFn))
         {
@@ -471,11 +607,7 @@ namespace dash::frontend
         for (const auto &ann : decl->annotations)
         {
             if (ann.name == "Namespace")
-            {
-                if (ann.argument.empty())
-                    core::throwDiagnostic(ann.location, "@Namespace requires a non-empty string argument");
-                decl->name = ann.argument + "::" + decl->name;
-            }
+                core::throwDiagnostic(ann.location, "@Namespace has been removed; use namespace \"name\" { ... } instead");
         }
         (void)expect(TokenKind::LParen, "expected '(' after function name");
         if (!check(TokenKind::RParen))
@@ -529,6 +661,8 @@ namespace dash::frontend
                 decl->methods.push_back(parseClassMethod(isPrivate, std::move(annotations)));
                 continue;
             }
+            if (check(TokenKind::KwNamespace))
+                core::throwDiagnostic(current().location, "namespaces are not allowed inside classes");
             if (!annotations.empty())
                 core::throwDiagnostic(current().location, "annotations can only be applied to methods inside classes");
             if (match(TokenKind::KwLet) || match(TokenKind::KwConst))
@@ -796,7 +930,7 @@ namespace dash::frontend
         for (const auto &ann : method.annotations)
         {
             if (ann.name == "Namespace")
-                core::throwDiagnostic(ann.location, "@Namespace is not allowed on class methods");
+                core::throwDiagnostic(ann.location, "@Namespace has been removed; use namespace \"name\" { ... } instead");
         }
         method.body = parseBlock();
         return method;
