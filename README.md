@@ -4,7 +4,7 @@
 
 Dash is a compiled programming language based on LLVM, designed for portability, small binaries, and low-level control.
 
-Version: v5.0.0LL, Repository Version: v2.0.5
+Version: v5.1.0LL, Repository Version: v2.0.5
 
 Patches:
 

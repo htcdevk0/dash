@@ -150,6 +150,7 @@ struct ArrayRemoveExpr final : Expr {
 
 struct VariableDeclStmt final : Stmt {
     bool isMutable {false};
+    bool hasExplicitType {false};
     std::string name;
     core::TypeRef type {};
     std::unique_ptr<Expr> initializer;
@@ -239,6 +240,7 @@ struct GlobalVarDecl final : Decl {
     bool isExport {false};
     bool isExtern {false};
     bool isPrivate {false};
+    bool hasExplicitType {false};
     std::string abi;
     std::string name;
     core::TypeRef type {};

@@ -283,7 +283,7 @@ namespace dash::sema
                     }
                 }
             }
-            else if (global->type.kind == core::BuiltinTypeKind::Unknown)
+            else if (global->type.kind == core::BuiltinTypeKind::Unknown && !global->hasExplicitType)
             {
                 core::throwDiagnostic(global->location, "global variable declaration without type requires an initializer");
             }
@@ -320,8 +320,6 @@ namespace dash::sema
 
         analyzeBlock(*function.body, false);
 
-        if (function.name != "main" && !function.returnType.isVoid() && !statementAlwaysReturns(*function.body))
-            core::throwDiagnostic(function.location, "non-void function must end with an explicit return statement on all paths");
 
         popScope();
     }
@@ -414,8 +412,6 @@ namespace dash::sema
 
         analyzeBlock(*method.body, false);
 
-        if (!method.returnType.isVoid() && !statementAlwaysReturns(*method.body))
-            core::throwDiagnostic(method.location, "non-void method must end with an explicit return statement on all paths");
 
         currentClass_ = nullptr;
         popScope();
@@ -512,7 +508,7 @@ namespace dash::sema
                 declareVariable(VariableSymbol{variable->name, variable->type, variable->isMutable}, variable->location);
                 return;
             }
-            if (variable->type.kind == core::BuiltinTypeKind::Unknown)
+            if (variable->type.kind == core::BuiltinTypeKind::Unknown && !variable->hasExplicitType)
                 core::throwDiagnostic(variable->location, "variable declaration without type requires an initializer");
             if (variable->type.isArray())
                 core::throwDiagnostic(variable->location, "array variables require an initializer");
@@ -566,7 +562,7 @@ namespace dash::sema
             if (ret->value)
             {
                 const auto valueType = analyzeExpr(*ret->value);
-                if (!core::isImplicitlyConvertible(valueType, currentReturnType_))
+                if (valueType.kind != core::BuiltinTypeKind::Unknown && !core::isImplicitlyConvertible(valueType, currentReturnType_))
                     core::throwDiagnostic(ret->location, "cannot return value of type " + core::toString(valueType) + " from function returning " + core::toString(currentReturnType_));
             }
             else if (!currentReturnType_.isVoid())

@@ -1284,7 +1284,7 @@ namespace dash::codegen
                 if (method.returnType.isVoid())
                     builder_->CreateRetVoid();
                 else
-                    core::throwDiagnostic(method.location, "control reached end of non-void method '" + method.name + "'");
+                    builder_->CreateRet(emitValueOrDefault(method.returnType, nullptr));
             }
 
             popLocalScope();
@@ -1593,7 +1593,7 @@ namespace dash::codegen
             }
             else
             {
-                core::throwDiagnostic(decl.location, "control reached end of non-void function '" + decl.name + "'");
+                builder_->CreateRet(emitValueOrDefault(decl.returnType, nullptr));
             }
         }
 

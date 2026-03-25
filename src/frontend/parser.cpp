@@ -743,10 +743,12 @@ namespace dash::frontend
             const auto &name = expect(TokenKind::Identifier, "expected variable name");
 
             core::TypeRef type{core::BuiltinTypeKind::Unknown, ""};
+            bool hasExplicitType = false;
             std::unique_ptr<ast::Expr> initializer;
 
             if (match(TokenKind::Colon))
             {
+                hasExplicitType = true;
                 type = parseType();
             }
 
@@ -756,7 +758,7 @@ namespace dash::frontend
                 if (dynamic_cast<ast::NullLiteralExpr *>(initializer.get()) != nullptr)
                     initializer.reset();
             }
-            else if (type.kind == core::BuiltinTypeKind::Unknown)
+            else if (!hasExplicitType)
             {
                 core::throwDiagnostic(name.location, "variable declaration without type requires an initializer");
             }
@@ -765,6 +767,7 @@ namespace dash::frontend
             decl->location = name.location;
             decl->isMutable = isMutable;
             decl->isExport = isExport;
+            decl->hasExplicitType = hasExplicitType;
             decl->name = name.lexeme;
             decl->type = type;
             decl->initializer = std::move(initializer);
@@ -1430,10 +1433,12 @@ namespace dash::frontend
             const auto &name = expect(TokenKind::Identifier, "expected variable name");
 
             core::TypeRef type{core::BuiltinTypeKind::Unknown, ""};
+            bool hasExplicitType = false;
             std::unique_ptr<ast::Expr> initializer;
 
             if (match(TokenKind::Colon))
             {
+                hasExplicitType = true;
                 type = parseType();
             }
 
@@ -1443,7 +1448,7 @@ namespace dash::frontend
                 if (dynamic_cast<ast::NullLiteralExpr *>(initializer.get()) != nullptr)
                     initializer.reset();
             }
-            else if (type.kind == core::BuiltinTypeKind::Unknown)
+            else if (!hasExplicitType)
             {
                 core::throwDiagnostic(name.location, "variable declaration without type requires an initializer");
             }
@@ -1451,6 +1456,7 @@ namespace dash::frontend
             auto stmt = std::make_unique<ast::VariableDeclStmt>();
             stmt->location = name.location;
             stmt->isMutable = isMutable;
+            stmt->hasExplicitType = hasExplicitType;
             stmt->name = name.lexeme;
             stmt->type = type;
             stmt->initializer = std::move(initializer);

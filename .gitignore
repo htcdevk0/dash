@@ -6,3 +6,4 @@ build/
 *.exe
 .DS_Store
 .vscode/
+LLVM-22.1.1/

@@ -3,39 +3,77 @@ BUILD_DIR := build
 BINARY := $(BUILD_DIR)/$(PROJECT_NAME)
 
 CXX ?= clang++
-AR ?= ar
-LLVM_CONFIG ?= $(shell command -v llvm-config-22 2>/dev/null || command -v llvm-config 2>/dev/null)
 
-ifeq ($(strip $(LLVM_CONFIG)),)
-$(error llvm-config was not found. Install LLVM and rerun with LLVM_CONFIG=/path/to/llvm-config)
-endif
+BUILD ?= release
+LLVM_DIR ?= ./LLVM-22.1.1
 
-SRC := \
-    src/main.cpp \
-    src/frontend/lexer.cpp \
-    src/frontend/parser.cpp \
-    src/frontend/source_loader.cpp \
-    src/sema/analyzer.cpp \
-    src/codegen/codegen.cpp
-
+SRC := $(shell find src -name '*.cpp')
 OBJ := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(SRC))
 DEP := $(OBJ:.o=.d)
 
-BASE_CXXFLAGS := -std=c++20 -O2 -g -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wnon-virtual-dtor -MMD -MP -Iinclude
-LLVM_CXXFLAGS := $(shell $(LLVM_CONFIG) --cxxflags)
-LLVM_LDFLAGS := $(shell $(LLVM_CONFIG) --ldflags --system-libs --libs all)
+ifeq ($(BUILD),debug)
+	OPT_FLAGS := -O0 -g
+else
+	OPT_FLAGS := -O2
+endif
 
-CXXFLAGS := $(BASE_CXXFLAGS) $(filter-out -std=% -fno-exceptions,$(LLVM_CXXFLAGS)) -fexceptions
-LDFLAGS := $(LLVM_LDFLAGS)
+BASE_CXXFLAGS := -std=c++20 $(OPT_FLAGS) -Wall -Wextra -Wpedantic -MMD -MP -Iinclude
 
-.PHONY: all clean test samples dirs
+LLVM_CONFIG_LOCAL := $(LLVM_DIR)/bin/llvm-config
+LLVM_CONFIG_SYS := $(shell command -v llvm-config)
 
-all: $(BINARY)
+ifeq ($(MODE),dynamic)
+	LLVM_CONFIG := $(LLVM_CONFIG_SYS)
+else
+	LLVM_CONFIG := $(LLVM_CONFIG_LOCAL)
+endif
 
-dirs:
-	@mkdir -p $(BUILD_DIR) $(BUILD_DIR)/frontend $(BUILD_DIR)/sema $(BUILD_DIR)/codegen
+ifeq ($(MODE),dynamic)
+	LLVM_LINK := $(shell $(LLVM_CONFIG) --ldflags --libs --system-libs)
+else
+	LLVM_LINK := $(shell $(LLVM_CONFIG) --ldflags --libs --system-libs --link-static)
+endif
 
-$(BINARY): dirs $(OBJ)
+LLVM_CXXFLAGS := $(filter-out -fno-rtti -fno-exceptions -std=%,$(shell $(LLVM_CONFIG) --cxxflags))
+
+CXXFLAGS := $(BASE_CXXFLAGS) $(LLVM_CXXFLAGS) -fexceptions -frtti
+LDFLAGS := $(LLVM_LINK) -static-libstdc++ -static-libgcc
+
+.PHONY: all dynamic clean setup-llvm ensure-llvm build
+
+all: ensure-llvm
+	$(MAKE) MODE=static build
+
+dynamic: ensure-llvm
+	$(MAKE) MODE=dynamic build
+
+setup-llvm:
+	@chmod +x ./setup/llvm.sh
+	@./setup/llvm.sh
+
+ensure-llvm:
+ifeq ($(MODE),dynamic)
+	@if [ -z "$(LLVM_CONFIG_SYS)" ]; then \
+		echo "[error] system llvm-config not found"; \
+		exit 1; \
+	fi
+else
+	@if [ ! -x "$(LLVM_CONFIG_LOCAL)" ]; then \
+		printf "[setup] LLVM not found. Download now? [Y/n] "; \
+		read ans; \
+		if [ "$$ans" != "n" ] && [ "$$ans" != "N" ]; then \
+			$(MAKE) setup-llvm; \
+		else \
+			echo "[error] LLVM required"; \
+			exit 1; \
+		fi \
+	fi
+endif
+
+build: $(BINARY)
+
+$(BINARY): $(OBJ)
+	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(OBJ) -o $@ $(LDFLAGS)
 
 $(BUILD_DIR)/%.o: src/%.cpp
@@ -44,16 +82,5 @@ $(BUILD_DIR)/%.o: src/%.cpp
 
 clean:
 	rm -rf $(BUILD_DIR)
-
-test: $(BINARY)
-	@mkdir -p $(BUILD_DIR)/tests
-	./$(BINARY) tests/smoke/basic_arithmetic.ds --emit-llvm -o $(BUILD_DIR)/tests/basic_arithmetic.ll
-	./$(BINARY) tests/smoke/extern_printf.ds -c -o $(BUILD_DIR)/tests/extern_printf.o
-	./$(BINARY) tests/smoke/hex_uint.ds --emit-llvm -o $(BUILD_DIR)/tests/hex_uint.ll
-
-samples: $(BINARY)
-	@mkdir -p $(BUILD_DIR)/samples
-	./$(BINARY) samples/hello.ds --emit-llvm -o $(BUILD_DIR)/samples/hello.ll
-	./$(BINARY) samples/hex_uint.ds --emit-llvm -o $(BUILD_DIR)/samples/hex_uint.ll
 
 -include $(DEP)

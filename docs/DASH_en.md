@@ -5,7 +5,7 @@ Official syntax and other documentation for the ***Dash Programming Language™*
 Made by: htcdevk0
 
 Doc Version: v3.1.0
-Dash Version: v5.0.0LL
+Dash Version: v5.1.0LL
 Dash Repository Version: v2.0.5
 
 ---
