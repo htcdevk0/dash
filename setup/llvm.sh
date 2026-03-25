@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-URL="https://github.com/htcdevk0/dash/releases/download/LLVM-Pre-build/dash-linux-pre-compiled-llvm-x86_64.tar.gz"
+URL="https://github.com/htcdevk0/dash/releases/tag/LLVM-Pre-build-2.0/dash-linux-pre-compiled-llvm-x86_64.tar.gz"
 DEST="LLVM-22.1.1"
 TMP="$(mktemp -d)"
 

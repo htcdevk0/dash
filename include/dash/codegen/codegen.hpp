@@ -20,7 +20,6 @@ struct CompileOptions {
     bool emitLLVM {false};
     bool emitObjectOnly {false};
     bool emitShared {false};
-    std::string clangPath {"clang"};
     std::vector<std::string> linkProfiles;
     std::vector<std::string> extraLinkArgs;
     bool useDashRuntime {false};
@@ -102,8 +101,8 @@ private:
     void emitLLVMToFile(const std::string& path) const;
     void emitObjectFile(const std::string& path, bool positionIndependent = false);
     [[nodiscard]] std::string buildExtraLinkFlags(const std::vector<std::string>& linkProfiles, const std::vector<std::string>& extraLinkArgs, bool useDashRuntime, bool smartLinking) const;
-    void linkExecutable(const std::string& objectPath, const std::string& outputPath, const std::string& clangPath, const std::vector<std::string>& linkProfiles, const std::vector<std::string>& extraLinkArgs, bool useDashRuntime, bool smartLinking) const;
-    void linkSharedLibrary(const std::string& objectPath, const std::string& outputPath, const std::string& clangPath, const std::vector<std::string>& linkProfiles, const std::vector<std::string>& extraLinkArgs, bool useDashRuntime, bool smartLinking) const;
+    void linkExecutable(const std::string& objectPath, const std::string& outputPath, const std::vector<std::string>& linkProfiles, const std::vector<std::string>& extraLinkArgs, bool useDashRuntime, bool smartLinking) const;
+    void linkSharedLibrary(const std::string& objectPath, const std::string& outputPath, const std::vector<std::string>& linkProfiles, const std::vector<std::string>& extraLinkArgs, bool useDashRuntime, bool smartLinking) const;
 
     llvm::LLVMContext context_;
     std::unique_ptr<llvm::Module> module_;

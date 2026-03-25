@@ -25,7 +25,7 @@
 namespace
 {
 
-    constexpr const char *kDashVersion = "5.1.0LL";
+    constexpr const char *kDashVersion = "5.2.0LL";
 
     enum class CommandMode
     {
@@ -42,7 +42,6 @@ namespace
         bool emitLLVM{false};
         bool emitObjectOnly{false};
         bool emitShared{false};
-        std::string clangPath{"clang"};
         std::vector<std::string> linkProfiles;
         std::vector<std::string> extraLinkArgs;
         bool useDashRuntime{false};
@@ -115,7 +114,6 @@ namespace
                     << "  " << YELLOW << "--emit-llvm" << RESET << "       Emit LLVM IR (.ll)\n"
                     << "  " << YELLOW << "-obj / -c" << RESET << "        Emit object file\n"
                     << "  " << YELLOW << "--shared" << RESET << "          Build shared library (.so/.dll/.dylib)\n"
-                    << "  " << YELLOW << "--clang <path>" << RESET << "    Use custom clang for linking\n\n"
 
                     << BOLD << BLUE << "Linking:" << RESET << "\n"
                     << "  " << YELLOW << "-L=<profile>" << RESET << "     Extra link profile (e.g. gtk4)\n"
@@ -141,12 +139,12 @@ namespace
                     << DIM << "https://github.com/" << RESET
                     << GREEN << "htcdevk0" << RESET << "/"
                     << CYAN << "dash-stdlib" << RESET << "\n"
-                    
+
                     << "  "
                     << DIM << "https://github.com/" << RESET
                     << GREEN << "htcdevk0" << RESET << "/"
                     << CYAN << "dashtup" << RESET << "\n";
-                    
+
                 std::exit(0);
             }
 
@@ -212,16 +210,6 @@ namespace
                     throw std::runtime_error("missing value after -o");
                 }
                 options.outputPath = argv[++i];
-                continue;
-            }
-
-            if (arg == "--clang")
-            {
-                if (i + 1 >= argc)
-                {
-                    throw std::runtime_error("missing value after --clang");
-                }
-                options.clangPath = argv[++i];
                 continue;
             }
 
@@ -379,7 +367,6 @@ int main(int argc, char **argv)
                                       cli.emitLLVM,
                                       cli.emitObjectOnly,
                                       cli.emitShared,
-                                      cli.clangPath,
                                       cli.linkProfiles,
                                       cli.extraLinkArgs,
                                       cli.useDashRuntime,

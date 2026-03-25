@@ -765,9 +765,9 @@ namespace dash::codegen
         const auto objectPath = outputPath.parent_path() / (outputPath.stem().string() + ".o");
         emitObjectFile(objectPath.string(), options.emitShared);
         if (options.emitShared)
-            linkSharedLibrary(objectPath.string(), outputPath.string(), options.clangPath, options.linkProfiles, options.extraLinkArgs, options.useDashRuntime, options.smartLinking);
+            linkSharedLibrary(objectPath.string(), outputPath.string(), options.linkProfiles, options.extraLinkArgs, options.useDashRuntime, options.smartLinking);
         else
-            linkExecutable(objectPath.string(), outputPath.string(), options.clangPath, options.linkProfiles, options.extraLinkArgs, options.useDashRuntime, options.smartLinking);
+            linkExecutable(objectPath.string(), outputPath.string(), options.linkProfiles, options.extraLinkArgs, options.useDashRuntime, options.smartLinking);
         std::error_code removeError;
         std::filesystem::remove(objectPath, removeError);
     }
@@ -4030,6 +4030,110 @@ namespace dash::codegen
         passManager.run(*module_);
         out.flush();
     }
+        namespace
+    {
+        [[nodiscard]] std::string quoteShellArg(const std::string &value)
+        {
+            std::string out = "\"";
+            for (const char c : value)
+            {
+                if (c == '\\' || c == '"')
+                    out.push_back('\\');
+                out.push_back(c);
+            }
+            out.push_back('"');
+            return out;
+        }
+
+        [[nodiscard]] std::vector<std::filesystem::path> defaultElfSearchDirs()
+        {
+            return {
+                "/usr/lib", "/usr/lib64", "/lib", "/lib64",
+                "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu",
+                "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu",
+                "/usr/lib/riscv64-linux-gnu", "/lib/riscv64-linux-gnu"
+            };
+        }
+
+        [[nodiscard]] std::filesystem::path findFirstExisting(const std::vector<std::filesystem::path> &candidates)
+        {
+            std::error_code ec;
+            for (const auto &candidate : candidates)
+            {
+                if (!candidate.empty() && std::filesystem::exists(candidate, ec))
+                    return candidate;
+                ec.clear();
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::filesystem::path findRuntimeObject(const std::string &name)
+        {
+            std::vector<std::filesystem::path> candidates;
+            for (const auto &dir : defaultElfSearchDirs())
+                candidates.push_back(dir / name);
+            return findFirstExisting(candidates);
+        }
+
+        [[nodiscard]] std::filesystem::path findDynamicLinker(const std::string &triple)
+        {
+            std::vector<std::filesystem::path> candidates;
+            if (triple.find("x86_64") != std::string::npos)
+            {
+                candidates = {"/lib64/ld-linux-x86-64.so.2", "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2", "/lib/ld-linux-x86-64.so.2"};
+            }
+            else if (triple.find("aarch64") != std::string::npos)
+            {
+                candidates = {"/lib/ld-linux-aarch64.so.1", "/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"};
+            }
+            else if (triple.find("riscv64") != std::string::npos)
+            {
+                candidates = {"/lib/ld-linux-riscv64-lp64d.so.1", "/lib/riscv64-linux-gnu/ld-linux-riscv64-lp64d.so.1"};
+            }
+            else if (triple.find("i386") != std::string::npos || triple.find("i686") != std::string::npos)
+            {
+                candidates = {"/lib/ld-linux.so.2", "/lib/i386-linux-gnu/ld-linux.so.2"};
+            }
+            return findFirstExisting(candidates);
+        }
+
+        [[nodiscard]] std::string pkgConfigLibsOnly(const std::string &package)
+        {
+            const std::string command = "pkg-config --libs " + package + " 2>/dev/null";
+            FILE *pipe = popen(command.c_str(), "r");
+            if (pipe == nullptr)
+                return {};
+            std::string out;
+            char buffer[256];
+            while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+                out += buffer;
+            pclose(pipe);
+            while (!out.empty() && std::isspace(static_cast<unsigned char>(out.back())))
+                out.pop_back();
+            return out;
+        }
+
+        [[nodiscard]] std::string normalizeLdArg(const std::string &arg)
+        {
+            if (arg.rfind("-Wl,", 0) != 0)
+                return arg;
+            std::string out;
+            std::stringstream ss(arg.substr(4));
+            std::string item;
+            bool first = true;
+            while (std::getline(ss, item, ','))
+            {
+                if (item.empty())
+                    continue;
+                if (!first)
+                    out += ' ';
+                out += item;
+                first = false;
+            }
+            return out;
+        }
+    }
+
     std::string CodeGenerator::buildExtraLinkFlags(const std::vector<std::string> &linkProfiles, const std::vector<std::string> &extraLinkArgs, bool useDashRuntime, bool smartLinking) const
     {
         std::string flags;
@@ -4037,7 +4141,10 @@ namespace dash::codegen
         {
             if (profile == "gtk4")
             {
-                flags += " $(pkg-config --cflags --libs gtk4)";
+                const auto libs = pkgConfigLibsOnly("gtk4");
+                if (libs.empty())
+                    core::throwDiagnostic(core::SourceLocation{}, "pkg-config could not resolve gtk4 linker flags");
+                flags += " " + libs;
                 continue;
             }
             core::throwDiagnostic(core::SourceLocation{}, "unsupported -L profile during link: " + profile);
@@ -4049,14 +4156,14 @@ namespace dash::codegen
             const auto sharedDir = dashSharedSearchDir();
             if (!sharedDir.empty())
             {
-                flags += " -L\"" + sharedDir.string() + "\"";
+                flags += " -L" + quoteShellArg(sharedDir.string());
 #if !defined(_WIN32)
-                flags += " -Wl,-rpath,\"" + sharedDir.string() + "\"";
+                flags += " -rpath " + quoteShellArg(sharedDir.string());
 #endif
             }
         }
         for (const auto &input : dashSupportPlan.linkInputs)
-            flags += " \"" + input.string() + "\"";
+            flags += " " + quoteShellArg(input.string());
 
         if (useDashRuntime)
         {
@@ -4064,53 +4171,70 @@ namespace dash::codegen
             const auto runtimeLibs = discoverDashRuntimeLibraries();
             if (!runtimeDir.empty() && !runtimeLibs.empty())
             {
-                flags += " -L\"" + runtimeDir + "\"";
+                flags += " -L" + quoteShellArg(runtimeDir);
 #if !defined(_WIN32)
-                flags += " -Wl,-rpath,\"" + runtimeDir + "\"";
+                flags += " -rpath " + quoteShellArg(runtimeDir);
 #endif
                 for (const auto &lib : runtimeLibs)
-                    flags += " \"" + lib.string() + "\"";
+                    flags += " " + quoteShellArg(lib.string());
             }
         }
 
         for (const auto &arg : extraLinkArgs)
         {
+            const auto normalized = normalizeLdArg(arg);
+            if (normalized.empty())
+                continue;
             flags += " ";
-            const bool rawLinkerFlag = arg.rfind("-l", 0) == 0 || arg.rfind("-L", 0) == 0 || arg.rfind("-Wl,", 0) == 0;
+            const bool rawLinkerFlag = normalized.rfind("-l", 0) == 0 || normalized.rfind("-L", 0) == 0 || normalized.rfind("-rpath", 0) == 0 || normalized[0] == '-';
             if (rawLinkerFlag)
-                flags += arg;
+                flags += normalized;
             else
-                flags += "\"" + arg + "\"";
+                flags += quoteShellArg(normalized);
         }
         return flags;
     }
 
-    void CodeGenerator::linkExecutable(const std::string &objectPath, const std::string &outputPath, const std::string &clangPath, const std::vector<std::string> &linkProfiles, const std::vector<std::string> &extraLinkArgs, bool useDashRuntime, bool smartLinking) const
+    void CodeGenerator::linkExecutable(const std::string &objectPath, const std::string &outputPath, const std::vector<std::string> &linkProfiles, const std::vector<std::string> &extraLinkArgs, bool useDashRuntime, bool smartLinking) const
     {
+#if defined(_WIN32) || defined(__APPLE__)
+        core::throwDiagnostic(core::SourceLocation{}, "ld-based linking is currently supported only on ELF targets");
+#else
+        const auto crt1 = findRuntimeObject("crt1.o");
+        const auto crti = findRuntimeObject("crti.o");
+        const auto crtn = findRuntimeObject("crtn.o");
+        const auto dynamicLinker = findDynamicLinker(module_->getTargetTriple().str());
+        if (crt1.empty() || crti.empty() || crtn.empty() || dynamicLinker.empty())
+            core::throwDiagnostic(core::SourceLocation{}, "failed to resolve ELF runtime objects for ld link step");
+
         const std::string command =
-            clangPath + " -no-pie \"" + objectPath + "\" -o \"" + outputPath + "\"" + buildExtraLinkFlags(linkProfiles, extraLinkArgs, useDashRuntime, smartLinking) + " -lm";
+            std::string("ld -o ") + quoteShellArg(outputPath) +
+            " " + quoteShellArg(crt1.string()) +
+            " " + quoteShellArg(crti.string()) +
+            " " + quoteShellArg(objectPath) +
+            buildExtraLinkFlags(linkProfiles, extraLinkArgs, useDashRuntime, smartLinking) +
+            " -dynamic-linker " + quoteShellArg(dynamicLinker.string()) +
+            " -lc -lm " + quoteShellArg(crtn.string());
         if (std::system(command.c_str()) != 0)
-        {
             core::throwDiagnostic(core::SourceLocation{}, "link step failed: " + command);
-        }
+#endif
     }
 
-    void CodeGenerator::linkSharedLibrary(const std::string &objectPath, const std::string &outputPath, const std::string &clangPath, const std::vector<std::string> &linkProfiles, const std::vector<std::string> &extraLinkArgs, bool useDashRuntime, bool smartLinking) const
+    void CodeGenerator::linkSharedLibrary(const std::string &objectPath, const std::string &outputPath, const std::vector<std::string> &linkProfiles, const std::vector<std::string> &extraLinkArgs, bool useDashRuntime, bool smartLinking) const
     {
-#if defined(_WIN32)
-        const std::string command =
-            clangPath + " -shared \"" + objectPath + "\" -o \"" + outputPath + "\"" + buildExtraLinkFlags(linkProfiles, extraLinkArgs, useDashRuntime, smartLinking) + " -lm";
-#elif defined(__APPLE__)
-        const std::string command =
-            clangPath + " -dynamiclib \"" + objectPath + "\" -o \"" + outputPath + "\"" + buildExtraLinkFlags(linkProfiles, extraLinkArgs, useDashRuntime, smartLinking) + " -lm";
+#if defined(_WIN32) || defined(__APPLE__)
+        core::throwDiagnostic(core::SourceLocation{}, "ld-based shared linking is currently supported only on ELF targets");
 #else
+        const std::string soname = std::filesystem::path(outputPath).filename().string();
         const std::string command =
-            clangPath + " -shared \"" + objectPath + "\" -o \"" + outputPath + "\"" + buildExtraLinkFlags(linkProfiles, extraLinkArgs, useDashRuntime, smartLinking) + " -lm";
-#endif
+            std::string("ld -shared -o ") + quoteShellArg(outputPath) +
+            " " + quoteShellArg(objectPath) +
+            buildExtraLinkFlags(linkProfiles, extraLinkArgs, useDashRuntime, smartLinking) +
+            " -soname " + quoteShellArg(soname) +
+            " -lc -lm";
         if (std::system(command.c_str()) != 0)
-        {
             core::throwDiagnostic(core::SourceLocation{}, "shared link step failed: " + command);
-        }
+#endif
     }
 
 } // namespace dash::codegen
