@@ -73,6 +73,7 @@ private:
     [[nodiscard]] std::unique_ptr<ast::Expr> parseStringLiteralToken(const Token& token);
     [[nodiscard]] std::vector<std::unique_ptr<ast::Expr>> parseArgumentList();
     [[nodiscard]] bool isCastTypeStart() const noexcept;
+    [[nodiscard]] std::unique_ptr<ast::Expr> parseBuiltinDataExpr();
 
     std::vector<Token> tokens_;
     std::string filePath_;

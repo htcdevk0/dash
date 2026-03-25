@@ -53,6 +53,7 @@ enum class TokenKind {
     KwNamespace,
 
     At,
+    Hash,
     LParen,
     RParen,
     LBrace,

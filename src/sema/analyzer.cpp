@@ -52,7 +52,7 @@ namespace dash::sema
             out.arraySize = size;
             return out;
         }
-        [[nodiscard]] bool canAccessPrivateMember(const ClassSymbol* currentClass, const ClassSymbol& targetClass)
+        [[nodiscard]] bool canAccessPrivateMember(const ClassSymbol *currentClass, const ClassSymbol &targetClass)
         {
             return currentClass != nullptr && currentClass->name == targetClass.name;
         }
@@ -320,7 +320,6 @@ namespace dash::sema
 
         analyzeBlock(*function.body, false);
 
-
         popScope();
     }
 
@@ -411,7 +410,6 @@ namespace dash::sema
         }
 
         analyzeBlock(*method.body, false);
-
 
         currentClass_ = nullptr;
         popScope();
@@ -676,6 +674,26 @@ namespace dash::sema
             if (classes_.contains(variable->name))
                 return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Class, variable->name};
             return expr.inferredType = requireVariable(variable->name, variable->location).type;
+        }
+        if (auto *builtin = dynamic_cast<ast::BuiltinDataExpr *>(&expr))
+        {
+            if (builtin->name == "sizeof")
+            {
+                if (builtin->arguments.size() != 1)
+                    core::throwDiagnostic(builtin->location, "#sizeof(...) expects exactly 1 argument");
+
+                const auto argType = analyzeExpr(*builtin->arguments[0]);
+
+                if (argType.kind == core::BuiltinTypeKind::Unknown &&
+                    dynamic_cast<ast::NullLiteralExpr *>(builtin->arguments[0].get()) != nullptr)
+                {
+                    core::throwDiagnostic(builtin->location, "#sizeof(null) is not valid");
+                }
+
+                return expr.inferredType = makeUIntType();
+            }
+
+            core::throwDiagnostic(builtin->location, "unknown builtin data expression: #" + builtin->name);
         }
         if (auto *sizeExpr = dynamic_cast<ast::SizeExpr *>(&expr))
         {

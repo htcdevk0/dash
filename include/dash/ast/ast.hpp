@@ -338,4 +338,9 @@ struct MemberAssignmentStmt : Stmt {
     std::unique_ptr<Expr> value;
 };
 
+struct BuiltinDataExpr final : Expr {
+    std::string name;
+    std::vector<std::unique_ptr<Expr>> arguments;
+};
+
 } // namespace dash::ast

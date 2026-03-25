@@ -68,7 +68,6 @@ namespace dash::frontend
             return value;
         }
 
-
         [[nodiscard]] std::unique_ptr<ast::Expr> cloneExprForCompoundAssignment(const ast::Expr &expr)
         {
             if (const auto *var = dynamic_cast<const ast::VariableExpr *>(&expr))
@@ -723,7 +722,8 @@ namespace dash::frontend
                 bool negative = match(TokenKind::Minus);
                 const auto &valueTok = expect(TokenKind::IntegerLiteral, "expected integer literal in enum value");
                 item.value = static_cast<std::int64_t>(parseUnsignedIntegerLiteral(valueTok));
-                if (negative) item.value = -item.value;
+                if (negative)
+                    item.value = -item.value;
             }
             decl->items.push_back(item);
             nextValue = item.value + 1;
@@ -894,7 +894,11 @@ namespace dash::frontend
             field.name = name.lexeme;
             field.type = parseType();
             if (match(TokenKind::Arrow))
-                { auto __tmpInit = parseExpression(); if (dynamic_cast<ast::NullLiteralExpr *>(__tmpInit.get()) == nullptr) field.initializer = __tmpInit.release(); }
+            {
+                auto __tmpInit = parseExpression();
+                if (dynamic_cast<ast::NullLiteralExpr *>(__tmpInit.get()) == nullptr)
+                    field.initializer = __tmpInit.release();
+            }
             fields.push_back(field);
             if (!match(TokenKind::Comma))
                 break;
@@ -939,14 +943,14 @@ namespace dash::frontend
         return method;
     }
 
-    void Parser::parseClassExternMember(ast::ClassDecl& decl, bool isPrivate)
+    void Parser::parseClassExternMember(ast::ClassDecl &decl, bool isPrivate)
     {
         const auto location = previous().location;
 
         std::string abiName = "dash";
         if (match(TokenKind::LParen))
         {
-            const auto& abi = expect(TokenKind::StringLiteral, "expected ABI string in extern declaration");
+            const auto &abi = expect(TokenKind::StringLiteral, "expected ABI string in extern declaration");
             abiName = abi.lexeme;
             (void)expect(TokenKind::RParen, "expected ')' after extern ABI");
         }
@@ -1072,7 +1076,8 @@ namespace dash::frontend
 
     std::unique_ptr<ast::Stmt> Parser::parseIfStmt()
     {
-        auto wrapStatementAsBlock = [&](std::unique_ptr<ast::Stmt> bodyStmt) {
+        auto wrapStatementAsBlock = [&](std::unique_ptr<ast::Stmt> bodyStmt)
+        {
             auto block = std::make_unique<ast::BlockStmt>();
             block->location = bodyStmt->location;
             block->statements.push_back(std::move(bodyStmt));
@@ -1712,7 +1717,6 @@ namespace dash::frontend
         return expr;
     }
 
-
     std::unique_ptr<ast::Expr> Parser::parseLogicalAnd()
     {
         auto expr = parseEquality();
@@ -1841,9 +1845,37 @@ namespace dash::frontend
         return parsePrimary();
     }
 
+    [[nodiscard]] std::unique_ptr<ast::Expr> parseBuiltinDataExpr();
+    std::unique_ptr<ast::Expr> Parser::parseBuiltinDataExpr()
+    {
+        const auto hashLoc = previous().location;
+        const auto &nameTok = expect(TokenKind::Identifier, "expected builtin data name after '#'");
+        (void)expect(TokenKind::LParen, "expected '(' after builtin data name");
+
+        auto node = std::make_unique<ast::BuiltinDataExpr>();
+        node->location = hashLoc;
+        node->name = nameTok.lexeme;
+
+        if (!check(TokenKind::RParen))
+        {
+            do
+            {
+                node->arguments.push_back(parseExpression());
+            } while (match(TokenKind::Comma));
+        }
+
+        (void)expect(TokenKind::RParen, "expected ')' after builtin data arguments");
+        return node;
+    }
+
     std::unique_ptr<ast::Expr> Parser::parsePrimary()
     {
         std::unique_ptr<ast::Expr> expr;
+
+        if (match(TokenKind::Hash))
+        {
+            return parseBuiltinDataExpr();
+        }
 
         if (match(TokenKind::IntegerLiteral))
         {
@@ -1965,9 +1997,7 @@ namespace dash::frontend
         }
         else if (match(TokenKind::LParen))
         {
-            if ((check(TokenKind::Identifier) || check(TokenKind::KwSelf))
-                && (index_ + 1) < tokens_.size()
-                && tokens_[index_ + 1].kind == TokenKind::RParen)
+            if ((check(TokenKind::Identifier) || check(TokenKind::KwSelf)) && (index_ + 1) < tokens_.size() && tokens_[index_ + 1].kind == TokenKind::RParen)
             {
                 auto var = std::make_unique<ast::VariableExpr>();
                 var->location = current().location;
@@ -2163,10 +2193,7 @@ namespace dash::frontend
         std::vector<std::unique_ptr<ast::Expr>> args;
         do
         {
-            if (check(TokenKind::LParen)
-                && (index_ + 2) < tokens_.size()
-                && (tokens_[index_ + 1].kind == TokenKind::Identifier || tokens_[index_ + 1].kind == TokenKind::KwSelf)
-                && tokens_[index_ + 2].kind == TokenKind::RParen)
+            if (check(TokenKind::LParen) && (index_ + 2) < tokens_.size() && (tokens_[index_ + 1].kind == TokenKind::Identifier || tokens_[index_ + 1].kind == TokenKind::KwSelf) && tokens_[index_ + 2].kind == TokenKind::RParen)
             {
                 const auto open = advance();
                 const auto nameTok = advance();
@@ -2175,9 +2202,7 @@ namespace dash::frontend
                 forward->location = open.location;
                 args.push_back(std::move(forward));
             }
-            else if ((check(TokenKind::Identifier) || check(TokenKind::KwSelf))
-                     && (index_ + 1) < tokens_.size()
-                     && tokens_[index_ + 1].kind == TokenKind::Ellipsis)
+            else if ((check(TokenKind::Identifier) || check(TokenKind::KwSelf)) && (index_ + 1) < tokens_.size() && tokens_[index_ + 1].kind == TokenKind::Ellipsis)
             {
                 const auto nameTok = advance();
                 (void)expect(TokenKind::Ellipsis, "expected '...' after variadic forward name");

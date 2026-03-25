@@ -9,6 +9,7 @@
 #include <optional>
 #include <sstream>
 #include <system_error>
+#include <fstream>
 
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -322,6 +323,7 @@ namespace dash::codegen
             std::filesystem::path path;
             std::unordered_set<std::string> definedSymbols;
             std::unordered_set<std::string> undefinedSymbols;
+            std::vector<std::string> neededLibraries;
         };
 
         struct DashSupportLinkPlan
@@ -330,15 +332,56 @@ namespace dash::codegen
             bool usesSharedDashLibs{false};
         };
 
+        [[nodiscard]] std::string normalizeSharedLibraryLookupKey(const std::string &value)
+        {
+            if (value.empty())
+                return {};
+            return std::filesystem::path(value).filename().string();
+        }
+
+        [[nodiscard]] std::vector<std::string> scanDynamicNeededLibraries(const std::filesystem::path &path)
+        {
+            std::vector<std::string> needed;
+            if (!isSharedLibraryExtension(path))
+                return needed;
+
+            const std::string command = "readelf -d " + quoteShell(path.string()) + " 2>/dev/null";
+            std::FILE *pipe = popen(command.c_str(), "r");
+            if (pipe == nullptr)
+                return needed;
+
+            char buffer[4096];
+            while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+            {
+                const std::string line(buffer);
+                const auto marker = line.find("Shared library: [");
+                if (marker == std::string::npos)
+                    continue;
+                const auto startPos = marker + std::string("Shared library: [").size();
+                const auto endPos = line.find(']', startPos);
+                if (endPos == std::string::npos || endPos <= startPos)
+                    continue;
+                const auto name = normalizeSharedLibraryLookupKey(line.substr(startPos, endPos - startPos));
+                if (!name.empty())
+                    needed.push_back(name);
+            }
+
+            pclose(pipe);
+            std::sort(needed.begin(), needed.end());
+            needed.erase(std::unique(needed.begin(), needed.end()), needed.end());
+            return needed;
+        }
+
         [[nodiscard]] StaticLinkInputInfo scanStaticLinkInput(const std::filesystem::path &path)
         {
             StaticLinkInputInfo info;
             info.path = path;
+            info.neededLibraries = scanDynamicNeededLibraries(path);
 
             const bool shared = isSharedLibraryExtension(path);
             const std::string command = shared
-                ? "(nm -D " + quoteShell(path.string()) + " 2>/dev/null; nm " + quoteShell(path.string()) + " 2>/dev/null)"
-                : "nm " + quoteShell(path.string()) + " 2>/dev/null";
+                                            ? "(nm -D " + quoteShell(path.string()) + " 2>/dev/null; nm " + quoteShell(path.string()) + " 2>/dev/null)"
+                                            : "nm " + quoteShell(path.string()) + " 2>/dev/null";
             std::FILE *pipe = popen(command.c_str(), "r");
             if (pipe == nullptr)
                 return info;
@@ -407,6 +450,112 @@ namespace dash::codegen
             return {};
         }
 
+        [[nodiscard]] std::filesystem::path dashSmartLinkTempDir()
+        {
+            std::error_code ec;
+            auto dir = std::filesystem::temp_directory_path(ec);
+            if (ec || dir.empty())
+                dir = "/tmp";
+            dir /= "dash-smartlink";
+            std::filesystem::create_directories(dir, ec);
+            return dir;
+        }
+
+        [[nodiscard]] std::string hashSmartLinkSignature(const std::filesystem::path &path,
+                                                         const std::unordered_set<std::string> &keepGlobalSymbols,
+                                                         const std::unordered_set<std::string> &localizeSymbols)
+        {
+            std::vector<std::string> orderedKeep(keepGlobalSymbols.begin(), keepGlobalSymbols.end());
+            std::vector<std::string> orderedLocalize(localizeSymbols.begin(), localizeSymbols.end());
+            std::sort(orderedKeep.begin(), orderedKeep.end());
+            std::sort(orderedLocalize.begin(), orderedLocalize.end());
+
+            std::string signature = path.string();
+            signature += "|K|";
+            for (const auto &symbol : orderedKeep)
+            {
+                signature += symbol;
+                signature.push_back('|');
+            }
+            signature += "|L|";
+            for (const auto &symbol : orderedLocalize)
+            {
+                signature += symbol;
+                signature.push_back('|');
+            }
+
+            std::ostringstream out;
+            out << std::hex << std::hash<std::string>{}(signature);
+            return out.str();
+        }
+
+        [[nodiscard]] std::filesystem::path createFilteredStaticLinkInput(const StaticLinkInputInfo &staticInfo,
+                                                                          const std::unordered_set<std::string> &keepGlobalSymbols,
+                                                                          const std::unordered_set<std::string> &localizeSymbols)
+        {
+            if (keepGlobalSymbols.empty())
+                return {};
+
+            const auto ext = staticInfo.path.extension().string();
+            if (ext != ".o" && ext != ".obj")
+                return staticInfo.path;
+
+            const auto tempDir = dashSmartLinkTempDir();
+            const auto hash = hashSmartLinkSignature(staticInfo.path, keepGlobalSymbols, localizeSymbols);
+            const auto filteredPath = tempDir / (staticInfo.path.stem().string() + "__smart_" + hash + ext);
+            const auto keepFile = tempDir / (staticInfo.path.stem().string() + "__smart_" + hash + ".keep");
+            const auto localizeFile = tempDir / (staticInfo.path.stem().string() + "__smart_" + hash + ".localize");
+
+            std::error_code ec;
+            if (std::filesystem::exists(filteredPath, ec) && std::filesystem::is_regular_file(filteredPath, ec))
+                return filteredPath;
+
+            std::vector<std::string> orderedKeep(keepGlobalSymbols.begin(), keepGlobalSymbols.end());
+            std::sort(orderedKeep.begin(), orderedKeep.end());
+            {
+                std::ofstream keepOut(keepFile);
+                if (!keepOut)
+                    return staticInfo.path;
+                for (const auto &symbol : orderedKeep)
+                    keepOut << symbol << '\n';
+            }
+
+            const std::string retainCommand =
+                std::string("ld -r --retain-symbols-file=") + quoteShell(keepFile.string()) +
+                " -o " + quoteShell(filteredPath.string()) +
+                " " + quoteShell(staticInfo.path.string());
+            if (std::system(retainCommand.c_str()) != 0)
+                return staticInfo.path;
+
+            std::unordered_set<std::string> localizeCandidates;
+            for (const auto &symbol : localizeSymbols)
+            {
+                if (staticInfo.definedSymbols.contains(symbol))
+                    localizeCandidates.insert(symbol);
+            }
+
+            if (!localizeCandidates.empty())
+            {
+                std::vector<std::string> orderedLocalize(localizeCandidates.begin(), localizeCandidates.end());
+                std::sort(orderedLocalize.begin(), orderedLocalize.end());
+                {
+                    std::ofstream localizeOut(localizeFile);
+                    if (!localizeOut)
+                        return filteredPath;
+                    for (const auto &symbol : orderedLocalize)
+                        localizeOut << symbol << '\n';
+                }
+
+                const std::string localizeCommand =
+                    std::string("objcopy --localize-symbols=") + quoteShell(localizeFile.string()) +
+                    " " + quoteShell(filteredPath.string());
+                if (std::system(localizeCommand.c_str()) != 0)
+                    return filteredPath;
+            }
+
+            return filteredPath;
+        }
+
         [[nodiscard]] DashSupportLinkPlan discoverDashSupportLinkPlan(const std::unordered_set<std::string> &requiredSymbols, bool smartLinking)
         {
             DashSupportLinkPlan plan;
@@ -422,7 +571,7 @@ namespace dash::codegen
             if (!std::filesystem::exists(staticDir, ec) || !std::filesystem::is_directory(staticDir, ec))
                 return plan;
 
-            std::vector<StaticLinkInputInfo> candidates;
+            std::vector<StaticLinkInputInfo> staticCandidates;
             for (const auto &entry : std::filesystem::directory_iterator(staticDir, ec))
             {
                 if (ec)
@@ -431,94 +580,230 @@ namespace dash::codegen
                     continue;
                 if (!isStaticLinkInputExtension(entry.path()))
                     continue;
-                candidates.push_back(scanStaticLinkInput(std::filesystem::absolute(entry.path())));
+                staticCandidates.push_back(scanStaticLinkInput(std::filesystem::absolute(entry.path())));
             }
 
-            std::sort(candidates.begin(), candidates.end(), [](const StaticLinkInputInfo &lhs, const StaticLinkInputInfo &rhs)
+            std::sort(staticCandidates.begin(), staticCandidates.end(), [](const StaticLinkInputInfo &lhs, const StaticLinkInputInfo &rhs)
                       { return lhs.path < rhs.path; });
+
+            std::unordered_map<std::string, StaticLinkInputInfo> sharedCatalog;
+            const auto sharedDir = dashSharedSearchDir();
+            if (!sharedDir.empty())
+            {
+                for (const auto &entry : std::filesystem::directory_iterator(sharedDir, ec))
+                {
+                    if (ec)
+                        break;
+                    if (!entry.is_regular_file())
+                        continue;
+                    if (!isSharedLibraryExtension(entry.path()))
+                        continue;
+
+                    auto info = scanStaticLinkInput(std::filesystem::absolute(entry.path()));
+                    const auto key = normalizeSharedLibraryLookupKey(info.path.filename().string());
+                    if (!key.empty())
+                        sharedCatalog.insert_or_assign(key, std::move(info));
+                }
+            }
 
             std::unordered_set<std::string> unresolved = requiredSymbols;
             std::unordered_set<std::string> provided;
-            std::vector<bool> selected(candidates.size(), false);
+            std::unordered_set<std::string> addedInputs;
+            std::unordered_set<std::string> selectedStaticInputs;
+            std::unordered_set<std::string> selectedSharedInputs;
+            std::vector<std::string> pendingSharedDependencies;
+
+            const auto addInput = [&](const std::filesystem::path &path)
+            {
+                std::error_code localEc;
+                const auto normalized = std::filesystem::weakly_canonical(path, localEc).string();
+                const auto key = localEc ? path.lexically_normal().string() : normalized;
+                if (key.empty() || addedInputs.contains(key))
+                    return false;
+                addedInputs.insert(key);
+                plan.linkInputs.push_back(path);
+                return true;
+            };
+
+            const auto selectShared = [&](const StaticLinkInputInfo &sharedInfo)
+            {
+                const auto key = normalizeSharedLibraryLookupKey(sharedInfo.path.filename().string());
+                if (key.empty() || selectedSharedInputs.contains(key))
+                    return false;
+                selectedSharedInputs.insert(key);
+                const bool added = addInput(sharedInfo.path);
+                plan.usesSharedDashLibs = true;
+                pendingSharedDependencies.push_back(key);
+                for (const auto &symbol : sharedInfo.definedSymbols)
+                {
+                    provided.insert(symbol);
+                    unresolved.erase(symbol);
+                }
+                return added;
+            };
+
+            const auto selectFullStatic = [&](const StaticLinkInputInfo &staticInfo)
+            {
+                const auto key = normalizePathString(staticInfo.path.string());
+                if (key.empty() || selectedStaticInputs.contains(key))
+                    return false;
+                selectedStaticInputs.insert(key);
+                const bool added = addInput(staticInfo.path);
+                for (const auto &symbol : staticInfo.definedSymbols)
+                {
+                    provided.insert(symbol);
+                    unresolved.erase(symbol);
+                }
+                for (const auto &symbol : staticInfo.undefinedSymbols)
+                {
+                    if (!provided.contains(symbol))
+                        unresolved.insert(symbol);
+                }
+                return added;
+            };
+
+            const auto selectPartialStatic = [&](const StaticLinkInputInfo &staticInfo, const StaticLinkInputInfo &sharedInfo)
+            {
+                const auto key = normalizePathString(staticInfo.path.string());
+                if (key.empty() || selectedStaticInputs.contains(key))
+                    return false;
+
+                std::unordered_set<std::string> staticOnlySymbols;
+                std::unordered_set<std::string> sharedCoveredSymbols;
+                for (const auto &symbol : staticInfo.definedSymbols)
+                {
+                    if (sharedInfo.definedSymbols.contains(symbol))
+                    {
+                        sharedCoveredSymbols.insert(symbol);
+                        continue;
+                    }
+                    staticOnlySymbols.insert(symbol);
+                }
+
+                if (staticOnlySymbols.empty())
+                    return false;
+
+                const auto filteredPath = createFilteredStaticLinkInput(staticInfo, staticOnlySymbols, sharedCoveredSymbols);
+                selectedStaticInputs.insert(key);
+
+                const bool usedOriginalInput = filteredPath.empty() || filteredPath == staticInfo.path;
+                const bool added = addInput(usedOriginalInput ? staticInfo.path : filteredPath);
+
+                if (usedOriginalInput)
+                {
+                    for (const auto &symbol : staticInfo.definedSymbols)
+                    {
+                        provided.insert(symbol);
+                        unresolved.erase(symbol);
+                    }
+                }
+                else
+                {
+                    for (const auto &symbol : staticOnlySymbols)
+                    {
+                        provided.insert(symbol);
+                        unresolved.erase(symbol);
+                    }
+                }
+
+                for (const auto &symbol : staticInfo.undefinedSymbols)
+                {
+                    if (!provided.contains(symbol))
+                        unresolved.insert(symbol);
+                }
+                return added;
+            };
+
+            const auto resolveSharedDependencies = [&]()
+            {
+                bool changed = false;
+                while (!pendingSharedDependencies.empty())
+                {
+                    const auto key = pendingSharedDependencies.back();
+                    pendingSharedDependencies.pop_back();
+
+                    const auto sharedIt = sharedCatalog.find(key);
+                    if (sharedIt == sharedCatalog.end())
+                        continue;
+                    const auto &sharedInfo = sharedIt->second;
+
+                    for (const auto &neededLibrary : sharedInfo.neededLibraries)
+                    {
+                        const auto depKey = normalizeSharedLibraryLookupKey(neededLibrary);
+                        const auto depIt = sharedCatalog.find(depKey);
+                        if (depIt == sharedCatalog.end())
+                            continue;
+                        changed = selectShared(depIt->second) || changed;
+                    }
+
+                    for (const auto &undefinedSymbol : sharedInfo.undefinedSymbols)
+                    {
+                        if (provided.contains(undefinedSymbol))
+                            continue;
+                        for (const auto &[depKey, depInfo] : sharedCatalog)
+                        {
+                            if (depKey == key)
+                                continue;
+                            if (!depInfo.definedSymbols.contains(undefinedSymbol))
+                                continue;
+                            changed = selectShared(depInfo) || changed;
+                            break;
+                        }
+                    }
+                }
+                return changed;
+            };
 
             bool changed = true;
             while (changed)
             {
                 changed = false;
-                for (std::size_t i = 0; i < candidates.size(); ++i)
-                {
-                    if (selected[i])
-                        continue;
 
-                    std::unordered_set<std::string> requiredCoverage;
-                    for (const auto &symbol : candidates[i].definedSymbols)
+                for (const auto &candidate : staticCandidates)
+                {
+                    bool candidateNeeded = false;
+                    for (const auto &symbol : candidate.definedSymbols)
                     {
                         if (unresolved.contains(symbol))
-                            requiredCoverage.insert(symbol);
+                        {
+                            candidateNeeded = true;
+                            break;
+                        }
                     }
-                    if (requiredCoverage.empty())
+                    if (!candidateNeeded)
                         continue;
 
-                    selected[i] = true;
-                    changed = true;
-
-                    bool usedStaticInput = true;
                     if (smartLinking)
                     {
-                        const auto sharedPath = equivalentDashSharedLibrary(candidates[i].path);
-                        if (!sharedPath.empty())
+                        const auto sharedPath = equivalentDashSharedLibrary(candidate.path);
+                        const auto sharedKey = normalizeSharedLibraryLookupKey(sharedPath.filename().string());
+                        const auto sharedIt = sharedCatalog.find(sharedKey);
+                        if (!sharedKey.empty() && sharedIt != sharedCatalog.end())
                         {
-                            const auto sharedInfo = scanStaticLinkInput(sharedPath);
-                            bool sharedCoversAll = true;
-                            bool sharedCoversAny = false;
-                            for (const auto &symbol : requiredCoverage)
+                            changed = selectShared(sharedIt->second) || changed;
+                            changed = resolveSharedDependencies() || changed;
+
+                            bool needsStaticFallback = false;
+                            for (const auto &symbol : candidate.definedSymbols)
                             {
-                                if (sharedInfo.definedSymbols.contains(symbol))
-                                {
-                                    sharedCoversAny = true;
-                                }
-                                else
-                                {
-                                    sharedCoversAll = false;
-                                }
+                                if (sharedIt->second.definedSymbols.contains(symbol))
+                                    continue;
+                                if (!unresolved.contains(symbol))
+                                    continue;
+                                needsStaticFallback = true;
+                                break;
                             }
 
-                            if (sharedCoversAll)
-                            {
-                                plan.linkInputs.push_back(sharedPath);
-                                plan.usesSharedDashLibs = true;
-                                usedStaticInput = false;
-
-                                for (const auto &symbol : sharedInfo.definedSymbols)
-                                {
-                                    provided.insert(symbol);
-                                    unresolved.erase(symbol);
-                                }
-                            }
-                            else if (sharedCoversAny)
-                            {
-                                plan.linkInputs.push_back(sharedPath);
-                                plan.usesSharedDashLibs = true;
-                            }
+                            if (needsStaticFallback)
+                                changed = selectPartialStatic(candidate, sharedIt->second) || changed;
+                            continue;
                         }
                     }
 
-                    if (usedStaticInput)
-                    {
-                        plan.linkInputs.push_back(candidates[i].path);
-                        for (const auto &symbol : candidates[i].definedSymbols)
-                        {
-                            provided.insert(symbol);
-                            unresolved.erase(symbol);
-                        }
-
-                        for (const auto &symbol : candidates[i].undefinedSymbols)
-                        {
-                            if (!provided.contains(symbol))
-                                unresolved.insert(symbol);
-                        }
-                    }
+                    changed = selectFullStatic(candidate) || changed;
                 }
+
+                changed = resolveSharedDependencies() || changed;
             }
 
             return plan;
@@ -799,11 +1084,10 @@ namespace dash::codegen
         localTypeScopes_.clear();
         currentClass_ = nullptr;
         arrayType_ = llvm::StructType::create(context_, "dash.array");
-        arrayType_->setBody({
-            llvm::PointerType::get(context_, 0),
-            llvm::Type::getInt64Ty(context_),
-            llvm::Type::getInt64Ty(context_),
-            llvm::Type::getInt1Ty(context_)});
+        arrayType_->setBody({llvm::PointerType::get(context_, 0),
+                             llvm::Type::getInt64Ty(context_),
+                             llvm::Type::getInt64Ty(context_),
+                             llvm::Type::getInt1Ty(context_)});
         mallocFunction_ = nullptr;
         freeFunction_ = nullptr;
         reallocFunction_ = nullptr;
@@ -855,9 +1139,8 @@ namespace dash::codegen
             llvm::MDString::get(context_, kDashArtifactSignature));
 
         auto *named = module_->getOrInsertNamedMetadata("dash.signature");
-        named->addOperand(llvm::MDNode::get(context_, {
-            llvm::MDString::get(context_, "artifact"),
-            llvm::MDString::get(context_, kDashArtifactSignature)}));
+        named->addOperand(llvm::MDNode::get(context_, {llvm::MDString::get(context_, "artifact"),
+                                                       llvm::MDString::get(context_, kDashArtifactSignature)}));
     }
 
     void CodeGenerator::declareClass(ast::ClassDecl &decl)
@@ -880,16 +1163,16 @@ namespace dash::codegen
             if (field.isExtern)
             {
                 const std::string symbolName = field.abi == "c"
-                    ? field.name
-                    : ([&]() -> std::string {
+                                                   ? field.name
+                                                   : ([&]() -> std::string
+                                                      {
                         const auto key = dashAbiGlobalLogicalKey(field.location, field.name, field.type);
                         if (const auto it = dashAbiGlobalDefinitionSymbols_.find(key); it != dashAbiGlobalDefinitionSymbols_.end())
                             return it->second;
                         const auto uq = dashAbiGlobalUnqualifiedKey(field.name, field.type);
                         if (const auto it = dashAbiGlobalUniqueSymbols_.find(uq); it != dashAbiGlobalUniqueSymbols_.end() && !it->second.empty())
                             return it->second;
-                        return mangleDashAbiGlobalName(field.location, field.name, field.type);
-                    })();
+                        return mangleDashAbiGlobalName(field.location, field.name, field.type); })();
                 auto *global = module_->getGlobalVariable(symbolName);
                 if (global == nullptr)
                 {
@@ -963,16 +1246,16 @@ namespace dash::codegen
 
                 const auto key = mangleMethodName(decl.name, method.name);
                 const std::string symbolName = isExternC
-                    ? method.name
-                    : ([&]() -> std::string {
+                                                   ? method.name
+                                                   : ([&]() -> std::string
+                                                      {
                         const auto key = dashAbiFunctionLogicalKey(method.location, method.name, method.parameters, method.returnType);
                         if (const auto it = dashAbiFunctionDefinitionSymbols_.find(key); it != dashAbiFunctionDefinitionSymbols_.end())
                             return it->second;
                         const auto uq = dashAbiFunctionUnqualifiedKey(method.name, method.parameters, method.returnType);
                         if (const auto it = dashAbiFunctionUniqueSymbols_.find(uq); it != dashAbiFunctionUniqueSymbols_.end() && !it->second.empty())
                             return it->second;
-                        return mangleDashAbiFunctionName(method.location, method.name, method.parameters, method.returnType);
-                    })();
+                        return mangleDashAbiFunctionName(method.location, method.name, method.parameters, method.returnType); })();
                 auto *functionType = llvm::FunctionType::get(toLLVMType(method.returnType), parameterTypes, isVarArg);
                 auto *function = module_->getFunction(symbolName);
                 if (function == nullptr)
@@ -1061,8 +1344,9 @@ namespace dash::codegen
         {
             const bool isRootExtern = !rootInputPath_.empty() && normalizePathString(decl.location.file) == rootInputPath_;
             const std::string symbolName = decl.abi == "c"
-                ? decl.name
-                : ([&]() -> std::string {
+                                               ? decl.name
+                                               : ([&]() -> std::string
+                                                  {
                     const auto uq = dashAbiGlobalUnqualifiedKey(decl.name, storageType);
                     if (isRootExtern)
                     {
@@ -1090,8 +1374,7 @@ namespace dash::codegen
                         return it->second;
                     if (isRootExtern)
                         core::throwDiagnostic(decl.location, "unresolved Dash extern global '" + decl.name + "'; pass the matching .o/.so explicitly in the dash command line");
-                    return mangleDashAbiGlobalName(decl.location, decl.name, storageType);
-                })();
+                    return mangleDashAbiGlobalName(decl.location, decl.name, storageType); })();
             auto *global = module_->getGlobalVariable(symbolName);
             if (global == nullptr)
             {
@@ -1156,9 +1439,9 @@ namespace dash::codegen
 
                 const auto sizeValue = static_cast<std::uint64_t>(array->elements.size());
                 initializer = llvm::ConstantStruct::get(arrayType_, dataPointer,
-                    llvm::ConstantInt::get(i64Type, sizeValue),
-                    llvm::ConstantInt::get(i64Type, storageType.hasArraySize ? storageType.arraySize : sizeValue),
-                    falseValue);
+                                                        llvm::ConstantInt::get(i64Type, sizeValue),
+                                                        llvm::ConstantInt::get(i64Type, storageType.hasArraySize ? storageType.arraySize : sizeValue),
+                                                        falseValue);
             }
             else
             {
@@ -1329,8 +1612,9 @@ namespace dash::codegen
 
         const bool isRootExtern = !rootInputPath_.empty() && normalizePathString(decl.location.file) == rootInputPath_;
         const std::string symbolName = isExternC
-            ? decl.name
-            : ([&]() -> std::string {
+                                           ? decl.name
+                                           : ([&]() -> std::string
+                                              {
                 const auto uq = dashAbiFunctionUnqualifiedKey(decl.name, decl.parameters, decl.returnType);
                 if (isRootExtern)
                 {
@@ -1358,8 +1642,7 @@ namespace dash::codegen
                     return it->second;
                 if (isRootExtern)
                     core::throwDiagnostic(decl.location, "unresolved Dash extern function '" + decl.name + "'; pass the matching .o/.so explicitly in the dash command line");
-                return mangleDashAbiFunctionName(decl.location, decl.name, decl.parameters, decl.returnType);
-            })();
+                return mangleDashAbiFunctionName(decl.location, decl.name, decl.parameters, decl.returnType); })();
         if (isRootExtern)
             manualLinkFunctionSymbols_.insert(symbolName);
         llvm::Function *function = module_->getFunction(symbolName);
@@ -1687,7 +1970,8 @@ namespace dash::codegen
                     {
                         if (const auto *var = dynamic_cast<const ast::VariableExpr *>(indexExpr->object.get()))
                         {
-                            if (std::any_of(localTypeScopes_.rbegin(), localTypeScopes_.rend(), [&](const auto &scope){ return scope.contains(var->name + "_size") && scope.contains(var->name + "_data"); }))
+                            if (std::any_of(localTypeScopes_.rbegin(), localTypeScopes_.rend(), [&](const auto &scope)
+                                            { return scope.contains(var->name + "_size") && scope.contains(var->name + "_data"); }))
                             {
                                 auto *tagAlloca = createEntryAlloca(currentFunction_, llvm::Type::getInt64Ty(context_), variable->name + "__tag");
                                 auto *baseAlloca = lookupLocal(var->name + "_data", variable->location);
@@ -1746,7 +2030,8 @@ namespace dash::codegen
                         {
                             if (const auto *var = dynamic_cast<const ast::VariableExpr *>(indexExpr->object.get()))
                             {
-                                if (std::any_of(localTypeScopes_.rbegin(), localTypeScopes_.rend(), [&](const auto &scope){ return scope.contains(var->name + "_size") && scope.contains(var->name + "_data"); }))
+                                if (std::any_of(localTypeScopes_.rbegin(), localTypeScopes_.rend(), [&](const auto &scope)
+                                                { return scope.contains(var->name + "_size") && scope.contains(var->name + "_data"); }))
                                 {
                                     auto *baseAlloca = lookupLocal(var->name + "_data", assignment->location);
                                     auto *base = builder_->CreateLoad(llvm::PointerType::get(context_, 0), baseAlloca, var->name + ".data.tagcopybase");
@@ -2143,6 +2428,49 @@ namespace dash::codegen
             auto *value = emitExpr(*cast->operand);
             return castValue(value, fromType, toType);
         }
+        if (const auto *builtin = dynamic_cast<const ast::BuiltinDataExpr *>(&expr))
+        {
+            if (builtin->name == "sizeof")
+            {
+                if (builtin->arguments.size() != 1)
+                    core::throwDiagnostic(expr.location, "#sizeof(...) expects exactly 1 argument");
+
+                const auto *arg = builtin->arguments[0].get();
+                const auto argType = arg->inferredType;
+
+                // Array / list semantics requested by you:
+                // - fixed array/list with declared size -> returns fixed size/count
+                // - dynamic list/array -> returns current size/count
+                if (argType.isArray())
+                {
+                    if (argType.hasArraySize)
+                    {
+                        return llvm::ConstantInt::get(
+                            llvm::Type::getInt64Ty(context_),
+                            static_cast<std::uint64_t>(argType.arraySize));
+                    }
+
+                    return emitArraySizeValue(emitAddressOf(*arg));
+                }
+
+                // If it's a variadic value count in scope, you can extend here later if you want.
+                // For now: normal sizeof semantics for scalar/class/string/pointer.
+                if (argType.kind == core::BuiltinTypeKind::Unknown &&
+                    dynamic_cast<const ast::NullLiteralExpr *>(arg) != nullptr)
+                {
+                    core::throwDiagnostic(expr.location, "#sizeof(null) is not valid");
+                }
+
+                const auto allocSize = static_cast<std::uint64_t>(
+                    module_->getDataLayout().getTypeAllocSize(toLLVMType(argType)));
+
+                return llvm::ConstantInt::get(
+                    llvm::Type::getInt64Ty(context_),
+                    allocSize);
+            }
+
+            core::throwDiagnostic(expr.location, "unknown builtin data expression: #" + builtin->name);
+        }
         if (const auto *sizeExpr = dynamic_cast<const ast::SizeExpr *>(&expr))
         {
             if (sizeExpr->object->inferredType.isArray())
@@ -2439,15 +2767,19 @@ namespace dash::codegen
             std::vector<llvm::Value *> args;
             const bool variadic = !decl->parameters.empty() && decl->parameters.back().isVariadic;
             const std::size_t fixedCount = variadic ? decl->parameters.size() - 1 : decl->parameters.size();
-            const auto appendPackedDashMethodVariadics = [&]() {
+            const auto appendPackedDashMethodVariadics = [&]()
+            {
                 std::vector<llvm::Value *> vargs;
                 for (std::size_t i = fixedCount; i < method->arguments.size(); ++i)
                 {
                     llvm::Value *value = emitExpr(*method->arguments[i]);
                     vargs.push_back(emitRuntimeVariadicTag(*method->arguments[i]));
-                    if (value->getType()->isIntegerTy()) value = builder_->CreateIntCast(value, llvm::Type::getInt64Ty(context_), false);
-                    else if (value->getType()->isPointerTy()) value = builder_->CreatePtrToInt(value, llvm::Type::getInt64Ty(context_));
-                    else if (value->getType()->isDoubleTy()) value = builder_->CreateBitCast(value, llvm::Type::getInt64Ty(context_));
+                    if (value->getType()->isIntegerTy())
+                        value = builder_->CreateIntCast(value, llvm::Type::getInt64Ty(context_), false);
+                    else if (value->getType()->isPointerTy())
+                        value = builder_->CreatePtrToInt(value, llvm::Type::getInt64Ty(context_));
+                    else if (value->getType()->isDoubleTy())
+                        value = builder_->CreateBitCast(value, llvm::Type::getInt64Ty(context_));
                     vargs.push_back(value);
                 }
                 args.push_back(llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), vargs.size() / 2));
@@ -2461,10 +2793,8 @@ namespace dash::codegen
                 auto *typedBase = builder_->CreateInBoundsGEP(
                     arrayType,
                     stackBuffer,
-                    {
-                        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0),
-                        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0)
-                    },
+                    {llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0),
+                     llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0)},
                     method->method + ".vargs.base");
                 for (std::size_t i = 0; i < vargs.size(); ++i)
                 {
@@ -2684,15 +3014,23 @@ namespace dash::codegen
                 rhs = castValue(rhs, binary->right->inferredType, expr.inferredType);
                 if (expr.inferredType.isDouble())
                 {
-                    if (binary->op == "+") return builder_->CreateFAdd(lhs, rhs, "faddtmp");
-                    if (binary->op == "-") return builder_->CreateFSub(lhs, rhs, "fsubtmp");
-                    if (isMulLike) return builder_->CreateFMul(lhs, rhs, "fmultmp");
-                    if (isDivLike) return builder_->CreateFDiv(lhs, rhs, "fdivtmp");
+                    if (binary->op == "+")
+                        return builder_->CreateFAdd(lhs, rhs, "faddtmp");
+                    if (binary->op == "-")
+                        return builder_->CreateFSub(lhs, rhs, "fsubtmp");
+                    if (isMulLike)
+                        return builder_->CreateFMul(lhs, rhs, "fmultmp");
+                    if (isDivLike)
+                        return builder_->CreateFDiv(lhs, rhs, "fdivtmp");
                 }
-                if (binary->op == "+") return builder_->CreateAdd(lhs, rhs, "addtmp");
-                if (binary->op == "-") return builder_->CreateSub(lhs, rhs, "subtmp");
-                if (isMulLike) return builder_->CreateMul(lhs, rhs, "multmp");
-                if (isDivLike) return expr.inferredType.isUInt() ? builder_->CreateUDiv(lhs, rhs, "udivtmp") : builder_->CreateSDiv(lhs, rhs, "sdivtmp");
+                if (binary->op == "+")
+                    return builder_->CreateAdd(lhs, rhs, "addtmp");
+                if (binary->op == "-")
+                    return builder_->CreateSub(lhs, rhs, "subtmp");
+                if (isMulLike)
+                    return builder_->CreateMul(lhs, rhs, "multmp");
+                if (isDivLike)
+                    return expr.inferredType.isUInt() ? builder_->CreateUDiv(lhs, rhs, "udivtmp") : builder_->CreateSDiv(lhs, rhs, "sdivtmp");
             }
             if (binary->op == "%")
             {
@@ -2728,7 +3066,8 @@ namespace dash::codegen
                 };
                 auto *lhsCmp = toPtrInt(lhs, lhsTypeCmp);
                 auto *rhsCmp = toPtrInt(rhs, rhsTypeCmp);
-                if (binary->op == "==") return builder_->CreateICmpEQ(lhsCmp, rhsCmp, "ptrcmp.eq");
+                if (binary->op == "==")
+                    return builder_->CreateICmpEQ(lhsCmp, rhsCmp, "ptrcmp.eq");
                 return builder_->CreateICmpNE(lhsCmp, rhsCmp, "ptrcmp.ne");
             }
 
@@ -2737,12 +3076,18 @@ namespace dash::codegen
                 const auto arithmeticType = core::usualArithmeticType(binary->left->inferredType, binary->right->inferredType);
                 lhs = castValue(lhs, binary->left->inferredType, arithmeticType);
                 rhs = castValue(rhs, binary->right->inferredType, arithmeticType);
-                if (binary->op == "<") return builder_->CreateFCmpOLT(lhs, rhs, "fcmp.lt");
-                if (binary->op == "<=") return builder_->CreateFCmpOLE(lhs, rhs, "fcmp.le");
-                if (binary->op == ">") return builder_->CreateFCmpOGT(lhs, rhs, "fcmp.gt");
-                if (binary->op == ">=") return builder_->CreateFCmpOGE(lhs, rhs, "fcmp.ge");
-                if (binary->op == "==") return builder_->CreateFCmpOEQ(lhs, rhs, "fcmp.eq");
-                if (binary->op == "!=") return builder_->CreateFCmpONE(lhs, rhs, "fcmp.ne");
+                if (binary->op == "<")
+                    return builder_->CreateFCmpOLT(lhs, rhs, "fcmp.lt");
+                if (binary->op == "<=")
+                    return builder_->CreateFCmpOLE(lhs, rhs, "fcmp.le");
+                if (binary->op == ">")
+                    return builder_->CreateFCmpOGT(lhs, rhs, "fcmp.gt");
+                if (binary->op == ">=")
+                    return builder_->CreateFCmpOGE(lhs, rhs, "fcmp.ge");
+                if (binary->op == "==")
+                    return builder_->CreateFCmpOEQ(lhs, rhs, "fcmp.eq");
+                if (binary->op == "!=")
+                    return builder_->CreateFCmpONE(lhs, rhs, "fcmp.ne");
             }
             if (binary->left->inferredType.isNumeric() && binary->right->inferredType.isNumeric())
             {
@@ -2750,17 +3095,25 @@ namespace dash::codegen
                 lhs = castValue(lhs, binary->left->inferredType, arithmeticType);
                 rhs = castValue(rhs, binary->right->inferredType, arithmeticType);
                 const bool isUnsigned = arithmeticType.isUInt();
-                if (binary->op == "<") return isUnsigned ? builder_->CreateICmpULT(lhs, rhs, "icmp.lt") : builder_->CreateICmpSLT(lhs, rhs, "icmp.lt");
-                if (binary->op == "<=") return isUnsigned ? builder_->CreateICmpULE(lhs, rhs, "icmp.le") : builder_->CreateICmpSLE(lhs, rhs, "icmp.le");
-                if (binary->op == ">") return isUnsigned ? builder_->CreateICmpUGT(lhs, rhs, "icmp.gt") : builder_->CreateICmpSGT(lhs, rhs, "icmp.gt");
-                if (binary->op == ">=") return isUnsigned ? builder_->CreateICmpUGE(lhs, rhs, "icmp.ge") : builder_->CreateICmpSGE(lhs, rhs, "icmp.ge");
-                if (binary->op == "==") return builder_->CreateICmpEQ(lhs, rhs, "icmp.eq");
-                if (binary->op == "!=") return builder_->CreateICmpNE(lhs, rhs, "icmp.ne");
+                if (binary->op == "<")
+                    return isUnsigned ? builder_->CreateICmpULT(lhs, rhs, "icmp.lt") : builder_->CreateICmpSLT(lhs, rhs, "icmp.lt");
+                if (binary->op == "<=")
+                    return isUnsigned ? builder_->CreateICmpULE(lhs, rhs, "icmp.le") : builder_->CreateICmpSLE(lhs, rhs, "icmp.le");
+                if (binary->op == ">")
+                    return isUnsigned ? builder_->CreateICmpUGT(lhs, rhs, "icmp.gt") : builder_->CreateICmpSGT(lhs, rhs, "icmp.gt");
+                if (binary->op == ">=")
+                    return isUnsigned ? builder_->CreateICmpUGE(lhs, rhs, "icmp.ge") : builder_->CreateICmpSGE(lhs, rhs, "icmp.ge");
+                if (binary->op == "==")
+                    return builder_->CreateICmpEQ(lhs, rhs, "icmp.eq");
+                if (binary->op == "!=")
+                    return builder_->CreateICmpNE(lhs, rhs, "icmp.ne");
             }
             if (binary->left->inferredType.isBool() && binary->right->inferredType.isBool())
             {
-                if (binary->op == "==") return builder_->CreateICmpEQ(lhs, rhs, "icmp.eq");
-                if (binary->op == "!=") return builder_->CreateICmpNE(lhs, rhs, "icmp.ne");
+                if (binary->op == "==")
+                    return builder_->CreateICmpEQ(lhs, rhs, "icmp.eq");
+                if (binary->op == "!=")
+                    return builder_->CreateICmpNE(lhs, rhs, "icmp.ne");
             }
             core::throwDiagnostic(expr.location, "unsupported binary operator during LLVM emission");
         }
@@ -2780,15 +3133,19 @@ namespace dash::codegen
             if (callbackReference)
                 return builder_->CreatePtrToInt(callee, llvm::Type::getInt64Ty(context_), call->callee + ".fnptr");
             std::vector<llvm::Value *> args;
-            const auto appendPackedDashVariadics = [&](std::size_t startIndex) {
+            const auto appendPackedDashVariadics = [&](std::size_t startIndex)
+            {
                 std::vector<llvm::Value *> vargs;
                 for (std::size_t i = startIndex; i < call->arguments.size(); ++i)
                 {
                     llvm::Value *value = emitExpr(*call->arguments[i]);
                     vargs.push_back(emitRuntimeVariadicTag(*call->arguments[i]));
-                    if (value->getType()->isIntegerTy()) value = builder_->CreateIntCast(value, llvm::Type::getInt64Ty(context_), false);
-                    else if (value->getType()->isPointerTy()) value = builder_->CreatePtrToInt(value, llvm::Type::getInt64Ty(context_));
-                    else if (value->getType()->isDoubleTy()) value = builder_->CreateBitCast(value, llvm::Type::getInt64Ty(context_));
+                    if (value->getType()->isIntegerTy())
+                        value = builder_->CreateIntCast(value, llvm::Type::getInt64Ty(context_), false);
+                    else if (value->getType()->isPointerTy())
+                        value = builder_->CreatePtrToInt(value, llvm::Type::getInt64Ty(context_));
+                    else if (value->getType()->isDoubleTy())
+                        value = builder_->CreateBitCast(value, llvm::Type::getInt64Ty(context_));
                     vargs.push_back(value);
                 }
                 args.push_back(llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), vargs.size() / 2));
@@ -2802,10 +3159,8 @@ namespace dash::codegen
                 auto *typedBase = builder_->CreateInBoundsGEP(
                     arrayType,
                     stackBuffer,
-                    {
-                        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0),
-                        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0)
-                    },
+                    {llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0),
+                     llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0)},
                     call->callee + ".vargs.base");
                 for (std::size_t i = 0; i < vargs.size(); ++i)
                 {
@@ -2816,8 +3171,8 @@ namespace dash::codegen
             };
             const std::size_t fixedCount = parameterTypes.size();
             const ast::VariadicForwardExpr *forwardExpr = (call->arguments.size() == fixedCount + 1)
-                ? dynamic_cast<const ast::VariadicForwardExpr *>(call->arguments.back().get())
-                : nullptr;
+                                                              ? dynamic_cast<const ast::VariadicForwardExpr *>(call->arguments.back().get())
+                                                              : nullptr;
             for (std::size_t i = 0; i < std::min(call->arguments.size(), fixedCount); ++i)
             {
                 llvm::Value *value = emitExpr(*call->arguments[i]);
@@ -3250,7 +3605,6 @@ namespace dash::codegen
         localTypeScopes_.pop_back();
     }
 
-
     llvm::Value *CodeGenerator::emitInterpolatedStringValue(const ast::InterpolatedStringExpr &expr)
     {
         auto *i8Type = llvm::Type::getInt8Ty(context_);
@@ -3568,9 +3922,9 @@ namespace dash::codegen
                 }
                 const auto sizeValue = static_cast<std::uint64_t>(array->elements.size());
                 return llvm::ConstantStruct::get(arrayType_, dataPointer,
-                    llvm::ConstantInt::get(i64Type, sizeValue),
-                    llvm::ConstantInt::get(i64Type, targetType.hasArraySize ? targetType.arraySize : sizeValue),
-                    llvm::ConstantInt::get(boolType, 0));
+                                                 llvm::ConstantInt::get(i64Type, sizeValue),
+                                                 llvm::ConstantInt::get(i64Type, targetType.hasArraySize ? targetType.arraySize : sizeValue),
+                                                 llvm::ConstantInt::get(boolType, 0));
             }
             if (targetType.kind == core::BuiltinTypeKind::Class)
             {
@@ -3755,7 +4109,6 @@ namespace dash::codegen
         memmoveFunction_ = llvm::cast<llvm::Function>(module_->getOrInsertFunction("memmove", type).getCallee());
         return memmoveFunction_;
     }
-
 
     llvm::Function *CodeGenerator::getOrCreateStrlen()
     {
@@ -4030,7 +4383,7 @@ namespace dash::codegen
         passManager.run(*module_);
         out.flush();
     }
-        namespace
+    namespace
     {
         [[nodiscard]] std::string quoteShellArg(const std::string &value)
         {
@@ -4051,8 +4404,7 @@ namespace dash::codegen
                 "/usr/lib", "/usr/lib64", "/lib", "/lib64",
                 "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu",
                 "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu",
-                "/usr/lib/riscv64-linux-gnu", "/lib/riscv64-linux-gnu"
-            };
+                "/usr/lib/riscv64-linux-gnu", "/lib/riscv64-linux-gnu"};
         }
 
         [[nodiscard]] std::filesystem::path findFirstExisting(const std::vector<std::filesystem::path> &candidates)
@@ -4159,6 +4511,7 @@ namespace dash::codegen
                 flags += " -L" + quoteShellArg(sharedDir.string());
 #if !defined(_WIN32)
                 flags += " -rpath " + quoteShellArg(sharedDir.string());
+                flags += " -rpath-link " + quoteShellArg(sharedDir.string());
 #endif
             }
         }

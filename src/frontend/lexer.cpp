@@ -223,6 +223,8 @@ namespace dash::frontend
             return "++";
         case TokenKind::MinusMinus:
             return "--";
+        case TokenKind::Hash:
+            return "#";
         }
         return "<unknown token>";
     }
@@ -286,6 +288,9 @@ namespace dash::frontend
             {
             case '@':
                 tokens.push_back(makeToken(TokenKind::At, "@", location));
+                break;
+            case '#':
+                tokens.push_back(makeToken(TokenKind::Hash, "#", location));
                 break;
             case '(':
                 tokens.push_back(makeToken(TokenKind::LParen, "(", location));
@@ -623,7 +628,6 @@ namespace dash::frontend
         return makeToken(sawDot ? TokenKind::FloatingLiteral : TokenKind::IntegerLiteral, std::move(text), location);
     }
 
-
     Token Lexer::lexChar()
     {
         const auto location = core::SourceLocation{filePath_, line_, column_};
@@ -650,13 +654,27 @@ namespace dash::frontend
             const char esc = advance();
             switch (esc)
             {
-            case 'n': value = '\n'; break;
-            case 'r': value = '\r'; break;
-            case 't': value = '\t'; break;
-            case '0': value = '\0'; break;
-            case '\'': value = '\''; break;
-            case '\\': value = '\\'; break;
-            default: value = esc; break;
+            case 'n':
+                value = '\n';
+                break;
+            case 'r':
+                value = '\r';
+                break;
+            case 't':
+                value = '\t';
+                break;
+            case '0':
+                value = '\0';
+                break;
+            case '\'':
+                value = '\'';
+                break;
+            case '\\':
+                value = '\\';
+                break;
+            default:
+                value = esc;
+                break;
             }
         }
         else
