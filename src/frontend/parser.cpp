@@ -1612,6 +1612,27 @@ namespace dash::frontend
                     (void)expect(TokenKind::Semicolon, "expected ';' after assignment");
                 return stmt;
             }
+            if (auto *index = dynamic_cast<ast::IndexExpr *>(expr.get()))
+            {
+                if (assignKind != TokenKind::Assign)
+                    core::throwDiagnostic(index->location, "compound assignment is not supported on indexed targets yet");
+
+                auto stmt = std::make_unique<ast::ExprStmt>();
+                stmt->location = index->location;
+
+                auto setExpr = std::make_unique<ast::ArraySetExpr>();
+                setExpr->location = index->location;
+                setExpr->array = std::move(index->object);
+                setExpr->index = std::move(index->index);
+                setExpr->value = std::move(rhs);
+
+                stmt->expr = std::move(setExpr);
+
+                if (expectSemicolon)
+                    (void)expect(TokenKind::Semicolon, "expected ';' after assignment");
+
+                return stmt;
+            }
             core::throwDiagnostic(previous().location, "invalid assignment target");
         }
         if (auto *var = dynamic_cast<ast::VariableExpr *>(expr.get()))

@@ -831,24 +831,43 @@ namespace dash::sema
             const auto arrayType = analyzeExpr(*push->array);
             if (!arrayType.isArray())
                 core::throwDiagnostic(push->location, "::push requires a let array");
+
             if (const auto *var = dynamic_cast<ast::VariableExpr *>(push->array.get()))
             {
                 if (!requireVariable(var->name, var->location).isMutable)
                     core::throwDiagnostic(push->location, "::push requires a mutable let array");
             }
+            else if (const auto *member = dynamic_cast<ast::MemberExpr *>(push->array.get()))
+            {
+                const auto objectType = analyzeExpr(*member->object);
+                if (objectType.kind != core::BuiltinTypeKind::Class)
+                    core::throwDiagnostic(push->location, "::push requires an array variable or mutable array field");
+
+                const auto &klass = requireClass(objectType.name, member->location);
+                auto it = klass.fields.find(member->member);
+                if (it == klass.fields.end())
+                    core::throwDiagnostic(member->location, "unknown field: " + member->member);
+                if (it->second.isPrivate && !canAccessPrivateMember(currentClass_, klass))
+                    core::throwDiagnostic(member->location, "field '" + member->member + "' is private in class '" + klass.name + "'");
+                if (!it->second.isMutable)
+                    core::throwDiagnostic(member->location, "::push requires a mutable array field");
+            }
             else
             {
-                core::throwDiagnostic(push->location, "::push currently requires an array variable");
+                core::throwDiagnostic(push->location, "::push currently requires an array variable or array field");
             }
+
             const auto valueType = analyzeExpr(*push->value);
             if (!core::isImplicitlyConvertible(valueType, arrayType.arrayElementType()))
                 core::throwDiagnostic(push->value->location, "::push expects " + core::toString(arrayType.arrayElementType()) + ", got " + core::toString(valueType));
+
             if (push->index)
             {
                 const auto indexType = analyzeExpr(*push->index);
                 if (!indexType.isNumeric())
                     core::throwDiagnostic(push->index->location, "::push index must be numeric");
             }
+
             return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Void, ""};
         }
         if (auto *insert = dynamic_cast<ast::ArrayInsertExpr *>(&expr))
@@ -856,21 +875,40 @@ namespace dash::sema
             const auto arrayType = analyzeExpr(*insert->array);
             if (!arrayType.isArray())
                 core::throwDiagnostic(insert->location, "::insert requires a let array");
+
             if (const auto *var = dynamic_cast<ast::VariableExpr *>(insert->array.get()))
             {
                 if (!requireVariable(var->name, var->location).isMutable)
                     core::throwDiagnostic(insert->location, "::insert requires a mutable let array");
             }
+            else if (const auto *member = dynamic_cast<ast::MemberExpr *>(insert->array.get()))
+            {
+                const auto objectType = analyzeExpr(*member->object);
+                if (objectType.kind != core::BuiltinTypeKind::Class)
+                    core::throwDiagnostic(insert->location, "::insert requires an array variable or mutable array field");
+
+                const auto &klass = requireClass(objectType.name, member->location);
+                auto it = klass.fields.find(member->member);
+                if (it == klass.fields.end())
+                    core::throwDiagnostic(member->location, "unknown field: " + member->member);
+                if (it->second.isPrivate && !canAccessPrivateMember(currentClass_, klass))
+                    core::throwDiagnostic(member->location, "field '" + member->member + "' is private in class '" + klass.name + "'");
+                if (!it->second.isMutable)
+                    core::throwDiagnostic(member->location, "::insert requires a mutable array field");
+            }
             else
             {
-                core::throwDiagnostic(insert->location, "::insert currently requires an array variable");
+                core::throwDiagnostic(insert->location, "::insert currently requires an array variable or array field");
             }
+
             const auto indexType = analyzeExpr(*insert->index);
             if (!indexType.isNumeric())
                 core::throwDiagnostic(insert->index->location, "::insert index must be numeric");
+
             const auto valueType = analyzeExpr(*insert->value);
             if (!core::isImplicitlyConvertible(valueType, arrayType.arrayElementType()))
                 core::throwDiagnostic(insert->value->location, "::insert expects " + core::toString(arrayType.arrayElementType()) + ", got " + core::toString(valueType));
+
             return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Void, ""};
         }
         if (auto *set = dynamic_cast<ast::ArraySetExpr *>(&expr))
@@ -878,21 +916,40 @@ namespace dash::sema
             const auto arrayType = analyzeExpr(*set->array);
             if (!arrayType.isArray())
                 core::throwDiagnostic(set->location, "::set requires a let array");
+
             if (const auto *var = dynamic_cast<ast::VariableExpr *>(set->array.get()))
             {
                 if (!requireVariable(var->name, var->location).isMutable)
                     core::throwDiagnostic(set->location, "::set requires a mutable let array");
             }
+            else if (const auto *member = dynamic_cast<ast::MemberExpr *>(set->array.get()))
+            {
+                const auto objectType = analyzeExpr(*member->object);
+                if (objectType.kind != core::BuiltinTypeKind::Class)
+                    core::throwDiagnostic(set->location, "::set requires an array variable or mutable array field");
+
+                const auto &klass = requireClass(objectType.name, member->location);
+                auto it = klass.fields.find(member->member);
+                if (it == klass.fields.end())
+                    core::throwDiagnostic(member->location, "unknown field: " + member->member);
+                if (it->second.isPrivate && !canAccessPrivateMember(currentClass_, klass))
+                    core::throwDiagnostic(member->location, "field '" + member->member + "' is private in class '" + klass.name + "'");
+                if (!it->second.isMutable)
+                    core::throwDiagnostic(member->location, "::set requires a mutable array field");
+            }
             else
             {
-                core::throwDiagnostic(set->location, "::set currently requires an array variable");
+                core::throwDiagnostic(set->location, "::set currently requires an array variable or array field");
             }
+
             const auto indexType = analyzeExpr(*set->index);
             if (!indexType.isNumeric())
                 core::throwDiagnostic(set->index->location, "::set index must be numeric");
+
             const auto valueType = analyzeExpr(*set->value);
             if (!core::isImplicitlyConvertible(valueType, arrayType.arrayElementType()))
                 core::throwDiagnostic(set->value->location, "::set expects " + core::toString(arrayType.arrayElementType()) + ", got " + core::toString(valueType));
+
             return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Void, ""};
         }
         if (auto *rem = dynamic_cast<ast::ArrayRemoveExpr *>(&expr))
@@ -900,18 +957,36 @@ namespace dash::sema
             const auto arrayType = analyzeExpr(*rem->array);
             if (!arrayType.isArray())
                 core::throwDiagnostic(rem->location, "::rem requires a let array");
+
             if (const auto *var = dynamic_cast<ast::VariableExpr *>(rem->array.get()))
             {
                 if (!requireVariable(var->name, var->location).isMutable)
                     core::throwDiagnostic(rem->location, "::rem requires a mutable let array");
             }
+            else if (const auto *member = dynamic_cast<ast::MemberExpr *>(rem->array.get()))
+            {
+                const auto objectType = analyzeExpr(*member->object);
+                if (objectType.kind != core::BuiltinTypeKind::Class)
+                    core::throwDiagnostic(rem->location, "::rem requires an array variable or mutable array field");
+
+                const auto &klass = requireClass(objectType.name, member->location);
+                auto it = klass.fields.find(member->member);
+                if (it == klass.fields.end())
+                    core::throwDiagnostic(member->location, "unknown field: " + member->member);
+                if (it->second.isPrivate && !canAccessPrivateMember(currentClass_, klass))
+                    core::throwDiagnostic(member->location, "field '" + member->member + "' is private in class '" + klass.name + "'");
+                if (!it->second.isMutable)
+                    core::throwDiagnostic(member->location, "::rem requires a mutable array field");
+            }
             else
             {
-                core::throwDiagnostic(rem->location, "::rem currently requires an array variable");
+                core::throwDiagnostic(rem->location, "::rem currently requires an array variable or array field");
             }
+
             const auto indexType = analyzeExpr(*rem->index);
             if (!indexType.isNumeric())
                 core::throwDiagnostic(rem->index->location, "::rem index must be numeric");
+
             return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Void, ""};
         }
         if (auto *member = dynamic_cast<ast::MemberExpr *>(&expr))
