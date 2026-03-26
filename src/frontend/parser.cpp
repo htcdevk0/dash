@@ -326,27 +326,37 @@ namespace dash::frontend
         if (namespaceStack_.empty())
             return;
 
-        std::string prefix;
-        for (std::size_t i = 0; i < namespaceStack_.size(); ++i)
+        const std::string prefix = currentNamespacePrefix();
+
+        auto qualify = [&](std::string &name)
         {
-            if (i != 0)
-                prefix += "::";
-            prefix += namespaceStack_[i];
-        }
+            if (name.find("::") == std::string::npos)
+                name = prefix + "::" + name;
+        };
 
         if (auto *fn = dynamic_cast<ast::FunctionDecl *>(&decl))
         {
-            fn->name = prefix + "::" + fn->name;
+            qualify(fn->name);
             return;
         }
         if (auto *ext = dynamic_cast<ast::ExternDecl *>(&decl))
         {
-            ext->name = prefix + "::" + ext->name;
+            qualify(ext->name);
             return;
         }
         if (auto *global = dynamic_cast<ast::GlobalVarDecl *>(&decl))
         {
-            global->name = prefix + "::" + global->name;
+            qualify(global->name);
+            return;
+        }
+        if (auto *klass = dynamic_cast<ast::ClassDecl *>(&decl))
+        {
+            qualify(klass->name);
+            return;
+        }
+        if (auto *en = dynamic_cast<ast::EnumDecl *>(&decl))
+        {
+            qualify(en->name);
             return;
         }
     }
@@ -423,13 +433,17 @@ namespace dash::frontend
                     core::throwDiagnostic(previous().location, "annotations can only be applied to functions and methods");
                 decl = parseGlobalVarDecl(false);
             }
-            else if (check(TokenKind::KwClass) || check(TokenKind::KwGroup))
+            else if (match(TokenKind::KwClass))
             {
-                core::throwDiagnostic(current().location, "classes and groups are not allowed inside namespaces");
+                decl = parseClassDecl();
             }
-            else if (check(TokenKind::KwEnum))
+            else if (match(TokenKind::KwGroup))
             {
-                core::throwDiagnostic(current().location, "enums are not allowed inside namespaces");
+                decl = parseGroupDecl();
+            }
+            else if (match(TokenKind::KwEnum))
+            {
+                decl = parseEnumDecl();
             }
             else
             {
@@ -635,7 +649,10 @@ namespace dash::frontend
         auto decl = std::make_unique<ast::ClassDecl>();
         decl->location = previous().location;
         decl->name = expect(TokenKind::Identifier, "expected class name").lexeme;
-        knownTypeNames_.insert(decl->name);
+        if (!namespaceStack_.empty())
+            knownTypeNames_.insert(currentNamespacePrefix() + "::" + decl->name);
+        else
+            knownTypeNames_.insert(decl->name);
 
         if (match(TokenKind::Colon))
         {
@@ -683,7 +700,10 @@ namespace dash::frontend
         auto decl = std::make_unique<ast::ClassDecl>();
         decl->location = previous().location;
         decl->name = expect(TokenKind::Identifier, "expected group name").lexeme;
-        knownTypeNames_.insert(decl->name);
+        if (!namespaceStack_.empty())
+            knownTypeNames_.insert(currentNamespacePrefix() + "::" + decl->name);
+        else
+            knownTypeNames_.insert(decl->name);
         decl->isGroup = true;
 
         (void)expect(TokenKind::LBrace, "expected '{' to start group body");
@@ -708,6 +728,10 @@ namespace dash::frontend
         auto decl = std::make_unique<ast::EnumDecl>();
         decl->location = previous().location;
         decl->name = expect(TokenKind::Identifier, "expected enum name").lexeme;
+        if (!namespaceStack_.empty())
+            knownTypeNames_.insert(currentNamespacePrefix() + "::" + decl->name);
+        else
+            knownTypeNames_.insert(decl->name);
         (void)expect(TokenKind::LBrace, "expected '{' to start enum body");
         std::int64_t nextValue = 0;
         while (!check(TokenKind::RBrace) && !atEnd())
@@ -752,7 +776,11 @@ namespace dash::frontend
                 type = parseType();
             }
 
-            if (match(TokenKind::Assign))
+            if (hasExplicitType && type.kind == core::BuiltinTypeKind::Class && check(TokenKind::LParen))
+            {
+                initializer = parseConstructorInitializer(type, name.location);
+            }
+            else if (match(TokenKind::Assign))
             {
                 initializer = parseExpression();
                 if (dynamic_cast<ast::NullLiteralExpr *>(initializer.get()) != nullptr)
@@ -838,23 +866,39 @@ namespace dash::frontend
         }
 
         core::TypeRef base{};
-        const TokenKind kind = current().kind;
-        const auto builtin = typeFromToken(kind);
-        if (builtin.kind != core::BuiltinTypeKind::Unknown)
+
+        if (match(TokenKind::Hash))
         {
-            (void)advance();
-            base = builtin;
-        }
-        else if (check(TokenKind::Identifier) || check(TokenKind::KwSelf))
-        {
-            const auto name = current().lexeme;
-            (void)advance();
-            base.kind = core::BuiltinTypeKind::Class;
-            base.name = name;
+            const auto &nameTok = expect(TokenKind::Identifier, "expected builtin type name after '#'");
+            if (nameTok.lexeme != "type")
+                core::throwDiagnostic(nameTok.location, "only #type(...) is valid in type positions");
+
+            (void)expect(TokenKind::LParen, "expected '(' after #type");
+            const auto queryName = parseQualifiedIdentifier(true);
+            (void)expect(TokenKind::RParen, "expected ')' after #type(...)");
+
+            base.kind = core::BuiltinTypeKind::TypeQuery;
+            base.name = queryName;
         }
         else
         {
-            core::throwDiagnostic(current().location, "expected builtin type name");
+            const TokenKind kind = current().kind;
+            const auto builtin = typeFromToken(kind);
+            if (builtin.kind != core::BuiltinTypeKind::Unknown)
+            {
+                (void)advance();
+                base = builtin;
+            }
+            else if (check(TokenKind::Identifier) || check(TokenKind::KwSelf))
+            {
+                const auto rawName = parseQualifiedIdentifier(true);
+                base.kind = core::BuiltinTypeKind::Class;
+                base.name = resolveTypeName(rawName);
+            }
+            else
+            {
+                core::throwDiagnostic(current().location, "expected builtin type name");
+            }
         }
 
         if (match(TokenKind::LBracket))
@@ -1447,7 +1491,11 @@ namespace dash::frontend
                 type = parseType();
             }
 
-            if (match(TokenKind::Assign))
+            if (hasExplicitType && type.kind == core::BuiltinTypeKind::Class && check(TokenKind::LParen))
+            {
+                initializer = parseConstructorInitializer(type, name.location);
+            }
+            else if (match(TokenKind::Assign))
             {
                 initializer = parseExpression();
                 if (dynamic_cast<ast::NullLiteralExpr *>(initializer.get()) != nullptr)
@@ -1868,6 +1916,75 @@ namespace dash::frontend
         return node;
     }
 
+    std::string Parser::parseQualifiedIdentifier(bool allowSelf)
+    {
+        std::string name;
+
+        if (allowSelf && match(TokenKind::KwSelf))
+        {
+            name = "self";
+        }
+        else
+        {
+            name = expect(TokenKind::Identifier, "expected identifier").lexeme;
+        }
+
+        while (check(TokenKind::Colon) &&
+               (index_ + 1) < tokens_.size() &&
+               tokens_[index_ + 1].kind == TokenKind::Colon)
+        {
+            (void)advance();
+            (void)expect(TokenKind::Colon, "expected second ':'");
+            name += "::" + expect(TokenKind::Identifier, "expected identifier after '::'").lexeme;
+        }
+
+        return name;
+    }
+
+    std::string Parser::resolveTypeName(const std::string &rawName) const
+    {
+        if (rawName == "self")
+            return rawName;
+
+        if (knownTypeNames_.contains(rawName))
+            return rawName;
+
+        if (!namespaceStack_.empty())
+        {
+            const auto qualified = currentNamespacePrefix() + "::" + rawName;
+            if (knownTypeNames_.contains(qualified))
+                return qualified;
+        }
+
+        return rawName;
+    }
+
+    std::string Parser::currentNamespacePrefix() const
+    {
+        std::string prefix;
+        for (std::size_t i = 0; i < namespaceStack_.size(); ++i)
+        {
+            if (i != 0)
+                prefix += "::";
+            prefix += namespaceStack_[i];
+        }
+        return prefix;
+    }
+
+    std::unique_ptr<ast::Expr> Parser::parseConstructorInitializer(const core::TypeRef &type, const core::SourceLocation &location)
+    {
+        auto ctor = std::make_unique<ast::ConstructorCallExpr>();
+        ctor->location = location;
+        ctor->targetType = type;
+
+        (void)expect(TokenKind::LParen, "expected '(' after class type in constructor initialization");
+        if (!check(TokenKind::RParen))
+            ctor->arguments = parseArgumentList();
+        (void)expect(TokenKind::RParen, "expected ')' after constructor arguments");
+
+        return ctor;
+    }
+
     std::unique_ptr<ast::Expr> Parser::parsePrimary()
     {
         std::unique_ptr<ast::Expr> expr;
@@ -1982,17 +2099,20 @@ namespace dash::frontend
             else
             {
                 index_ = savedIndex;
+                const auto rawName = parseQualifiedIdentifier(true);
                 auto node = std::make_unique<ast::VariableExpr>();
-                node->location = advance().location;
-                node->name = previous().lexeme;
+                node->location = savedToken.location;
+                node->name = rawName;
                 expr = std::move(node);
             }
         }
-        else if (match(TokenKind::Identifier) || match(TokenKind::KwSelf))
+        else if (check(TokenKind::Identifier) || check(TokenKind::KwSelf))
         {
+            const auto startToken = current();
+            const auto rawName = parseQualifiedIdentifier(true);
             auto node = std::make_unique<ast::VariableExpr>();
-            node->location = previous().location;
-            node->name = previous().lexeme;
+            node->location = startToken.location;
+            node->name = rawName;
             expr = std::move(node);
         }
         else if (match(TokenKind::LParen))
@@ -2179,13 +2299,37 @@ namespace dash::frontend
         return expr;
     }
 
-    bool Parser::isCastTypeStart() const noexcept
+    bool Parser::isQualifiedTypeStart() const noexcept
     {
-        const auto kind = current().kind;
-        const auto builtin = typeFromToken(kind);
+        const auto builtin = typeFromToken(current().kind);
         if (builtin.kind != core::BuiltinTypeKind::Unknown)
             return true;
-        return check(TokenKind::Identifier) && knownTypeNames_.contains(current().lexeme);
+
+        if (!check(TokenKind::Identifier) && !check(TokenKind::KwSelf))
+            return false;
+
+        std::size_t look = index_;
+        std::string name = tokens_[look].lexeme;
+        ++look;
+
+        while ((look + 1) < tokens_.size() &&
+               tokens_[look].kind == TokenKind::Colon &&
+               tokens_[look + 1].kind == TokenKind::Colon)
+        {
+            look += 2;
+            if (look >= tokens_.size() || tokens_[look].kind != TokenKind::Identifier)
+                return false;
+            name += "::" + tokens_[look].lexeme;
+            ++look;
+        }
+
+        return knownTypeNames_.contains(name) ||
+               (!namespaceStack_.empty() && knownTypeNames_.contains(currentNamespacePrefix() + "::" + name));
+    }
+
+    bool Parser::isCastTypeStart() const noexcept
+    {
+        return isQualifiedTypeStart();
     }
 
     std::vector<std::unique_ptr<ast::Expr>> Parser::parseArgumentList()

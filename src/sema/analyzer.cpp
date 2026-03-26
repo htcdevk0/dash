@@ -85,6 +85,14 @@ namespace dash::sema
 
     }
 
+    [[nodiscard]] std::string shortClassName(const std::string &name)
+    {
+        const auto pos = name.rfind("::");
+        if (pos == std::string::npos)
+            return name;
+        return name.substr(pos + 2);
+    }
+
     void Analyzer::analyze(ast::Program &program)
     {
         functions_.clear();
@@ -202,6 +210,14 @@ namespace dash::sema
                     continue;
                 }
 
+                if (externDecl->returnType.kind == core::BuiltinTypeKind::TypeQuery)
+                    core::throwDiagnostic(externDecl->location, "#type(...) is only allowed in variable declarations");
+                for (const auto &param : externDecl->parameters)
+                {
+                    if (param.type.kind == core::BuiltinTypeKind::TypeQuery)
+                        core::throwDiagnostic(param.location, "#type(...) is only allowed in variable declarations");
+                }
+
                 if (functions_.contains(externDecl->name))
                     core::throwDiagnostic(externDecl->location, "duplicate function declaration: " + externDecl->name);
                 functions_.emplace(externDecl->name, FunctionSymbol{externDecl->name, externDecl->parameters, externDecl->returnType, true, false, externDecl->location.file, false, false, {}});
@@ -211,6 +227,13 @@ namespace dash::sema
             {
                 if (functions_.contains(function->name))
                     core::throwDiagnostic(function->location, "duplicate function declaration: " + function->name);
+                if (function->returnType.kind == core::BuiltinTypeKind::TypeQuery)
+                    core::throwDiagnostic(function->location, "#type(...) is only allowed in variable declarations");
+                for (const auto &param : function->parameters)
+                {
+                    if (param.type.kind == core::BuiltinTypeKind::TypeQuery)
+                        core::throwDiagnostic(param.location, "#type(...) is only allowed in variable declarations");
+                }
                 if (function->name == "main")
                     validateMainSignature(*function);
                 functions_.emplace(function->name, FunctionSymbol{function->name, function->parameters, function->returnType, false, false, function->location.file, hasAnnotation(function->annotations, "Deprecated"), hasAnnotation(function->annotations, "Risky"), annotationArgument(function->annotations, "Warning")});
@@ -226,6 +249,9 @@ namespace dash::sema
             if (global == nullptr)
                 continue;
 
+            if (global->type.kind == core::BuiltinTypeKind::TypeQuery)
+                global->type = resolveTypeQuery(global->type, global->location);
+
             if (global->isExtern)
             {
                 if (global->abi != "c" && global->abi != "dash")
@@ -240,6 +266,8 @@ namespace dash::sema
 
             if (global->initializer)
             {
+                if (dynamic_cast<ast::ConstructorCallExpr *>(global->initializer.get()) != nullptr)
+                    core::throwDiagnostic(global->location, "constructor calls are not allowed in global initializers");
                 if (auto *arrayLiteral = dynamic_cast<ast::ArrayLiteralExpr *>(global->initializer.get()); arrayLiteral != nullptr && global->type.isArray())
                 {
                     if (!arrayLiteral->elements.empty())
@@ -331,6 +359,8 @@ namespace dash::sema
         declareVariable(VariableSymbol{"self", core::TypeRef{core::BuiltinTypeKind::Class, klass.name}, true}, klass.location);
         for (auto &field : klass.fields)
         {
+            if (field.type.kind == core::BuiltinTypeKind::TypeQuery)
+                core::throwDiagnostic(field.location, "#type(...) is only allowed in variable declarations");
             if (field.isExtern)
             {
                 if (field.abi != "c" && field.abi != "dash")
@@ -392,6 +422,10 @@ namespace dash::sema
             return;
         }
 
+        const bool isConstructor = (method.name == shortClassName(klass.name));
+        if (isConstructor && !method.returnType.isVoid())
+            core::throwDiagnostic(method.location, "constructor '" + method.name + "' must return void");
+
         pushScope();
         currentReturnType_ = method.returnType;
         currentClass_ = &requireClass(klass.name, klass.location);
@@ -410,6 +444,14 @@ namespace dash::sema
         }
 
         analyzeBlock(*method.body, false);
+
+        if (method.returnType.kind == core::BuiltinTypeKind::TypeQuery)
+            core::throwDiagnostic(method.location, "#type(...) is only allowed in variable declarations");
+        for (const auto &param : method.parameters)
+        {
+            if (param.type.kind == core::BuiltinTypeKind::TypeQuery)
+                core::throwDiagnostic(param.location, "#type(...) is only allowed in variable declarations");
+        }
 
         currentClass_ = nullptr;
         popScope();
@@ -456,6 +498,8 @@ namespace dash::sema
         }
         if (auto *variable = dynamic_cast<ast::VariableDeclStmt *>(&stmt))
         {
+            if (variable->type.kind == core::BuiltinTypeKind::TypeQuery)
+                variable->type = resolveTypeQuery(variable->type, variable->location);
             if (variable->type.isArray() && variable->isMutable && variable->type.hasArraySize)
                 core::throwDiagnostic(variable->location, "let arrays cannot declare a fixed maximum size; use type[]");
             if (variable->initializer)
@@ -652,6 +696,44 @@ namespace dash::sema
             }
             return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::String, ""};
         }
+        if (auto *ctor = dynamic_cast<ast::ConstructorCallExpr *>(&expr))
+        {
+            const auto &klass = requireClass(ctor->targetType.name, ctor->location);
+            const auto *decl = findConstructor(klass);
+
+            if (decl == nullptr)
+            {
+                if (!ctor->arguments.empty())
+                    core::throwDiagnostic(ctor->location, "class '" + klass.name + "' has no constructor but arguments were provided");
+                return expr.inferredType = ctor->targetType;
+            }
+
+            const bool variadic = !decl->parameters.empty() && decl->parameters.back().isVariadic;
+            const std::size_t fixedCount = variadic ? decl->parameters.size() - 1 : decl->parameters.size();
+
+            if ((!variadic && ctor->arguments.size() != decl->parameters.size()) ||
+                (variadic && ctor->arguments.size() < fixedCount))
+            {
+                core::throwDiagnostic(ctor->location, "wrong number of arguments in constructor '" + shortClassName(klass.name) + "'");
+            }
+
+            for (std::size_t i = 0; i < fixedCount; ++i)
+            {
+                const auto actual = analyzeExpr(*ctor->arguments[i]);
+                const auto expected = decl->parameters[i].type;
+                if (!core::isImplicitlyConvertible(actual, expected))
+                {
+                    core::throwDiagnostic(ctor->arguments[i]->location,
+                                          "constructor argument " + std::to_string(i + 1) + " expects " +
+                                              core::toString(expected) + ", got " + core::toString(actual));
+                }
+            }
+
+            for (std::size_t i = fixedCount; i < ctor->arguments.size(); ++i)
+                (void)analyzeExpr(*ctor->arguments[i]);
+
+            return expr.inferredType = ctor->targetType;
+        }
         if (dynamic_cast<ast::CharLiteralExpr *>(&expr) != nullptr)
             return expr.inferredType = core::TypeRef{core::BuiltinTypeKind::Char, ""};
         if (auto *array = dynamic_cast<ast::ArrayLiteralExpr *>(&expr))
@@ -692,6 +774,28 @@ namespace dash::sema
 
                 return expr.inferredType = makeUIntType();
             }
+
+            if (builtin->name == "size")
+            {
+                if (builtin->arguments.size() != 1)
+                    core::throwDiagnostic(builtin->location, "#size(...) expects exactly 1 argument");
+
+                const auto argType = analyzeExpr(*builtin->arguments[0]);
+
+                if (argType.isArray())
+                    return expr.inferredType = makeUIntType();
+
+                if (const auto *var = dynamic_cast<ast::VariableExpr *>(builtin->arguments[0].get()))
+                {
+                    if (hasVariadicStorage(scopes_, var->name))
+                        return expr.inferredType = makeUIntType();
+                }
+
+                core::throwDiagnostic(builtin->location, "#size(...) requires an array/list or variadic value");
+            }
+
+            if (builtin->name == "type")
+                core::throwDiagnostic(builtin->location, "#type(...) is only valid in type positions");
 
             core::throwDiagnostic(builtin->location, "unknown builtin data expression: #" + builtin->name);
         }
@@ -1119,6 +1223,27 @@ namespace dash::sema
             return expr.inferredType = function.returnType;
         }
         core::throwDiagnostic(expr.location, "unsupported expression in semantic analysis");
+    }
+
+    const ast::MemberFunctionDecl *Analyzer::findConstructor(const ClassSymbol &klass) const
+    {
+        const auto ctorName = shortClassName(klass.name);
+        const auto it = klass.methods.find(ctorName);
+        if (it == klass.methods.end())
+            return nullptr;
+        return it->second;
+    }
+
+    core::TypeRef Analyzer::resolveTypeQuery(const core::TypeRef &type, const core::SourceLocation &location) const
+    {
+        if (type.kind != core::BuiltinTypeKind::TypeQuery)
+            return type;
+
+        const auto &symbol = requireVariable(type.name, location);
+        if (symbol.type.kind == core::BuiltinTypeKind::TypeQuery)
+            core::throwDiagnostic(location, "nested #type(...) resolution is not allowed");
+
+        return symbol.type;
     }
 
     void Analyzer::validateMainSignature(const ast::FunctionDecl &function) const

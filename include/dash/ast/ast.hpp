@@ -343,4 +343,9 @@ struct BuiltinDataExpr final : Expr {
     std::vector<std::unique_ptr<Expr>> arguments;
 };
 
+struct ConstructorCallExpr final : Expr {
+    core::TypeRef targetType {};
+    std::vector<std::unique_ptr<Expr>> arguments;
+};
+
 } // namespace dash::ast

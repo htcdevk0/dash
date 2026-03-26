@@ -15,6 +15,7 @@ enum class BuiltinTypeKind {
     String,
     Class,
     Array,
+    TypeQuery,
     Unknown,
 };
 
@@ -37,6 +38,7 @@ struct TypeRef {
     [[nodiscard]] bool isNumeric() const noexcept { return pointerDepth == 0 && (isInt() || isUInt() || isDouble() || isChar()); }
     [[nodiscard]] bool isClass() const noexcept { return pointerDepth == 0 && kind == BuiltinTypeKind::Class; }
     [[nodiscard]] bool isArray() const noexcept { return pointerDepth == 0 && kind == BuiltinTypeKind::Array; }
+    [[nodiscard]] bool isTypeQuery() const noexcept { return pointerDepth == 0 && kind == BuiltinTypeKind::TypeQuery; }
     [[nodiscard]] bool isPointer() const noexcept { return pointerDepth > 0; }
 
     [[nodiscard]] TypeRef arrayElementType() const noexcept {
@@ -75,6 +77,7 @@ inline bool operator!=(const TypeRef& lhs, const TypeRef& rhs) noexcept {
         case BuiltinTypeKind::Char: base = "char"; break;
         case BuiltinTypeKind::String: base = "string"; break;
         case BuiltinTypeKind::Class: base = type.name; break;
+        case BuiltinTypeKind::TypeQuery: base = "#type(" + type.name + ")"; break;
         case BuiltinTypeKind::Array: {
             TypeRef elem{}; elem.kind = type.elementKind; elem.name = type.elementName;
             base = toString(elem) + "[" + (type.hasArraySize ? std::to_string(type.arraySize) : std::string{}) + "]";

@@ -74,6 +74,11 @@ private:
     [[nodiscard]] std::vector<std::unique_ptr<ast::Expr>> parseArgumentList();
     [[nodiscard]] bool isCastTypeStart() const noexcept;
     [[nodiscard]] std::unique_ptr<ast::Expr> parseBuiltinDataExpr();
+    [[nodiscard]] std::string currentNamespacePrefix() const;
+    [[nodiscard]] std::string parseQualifiedIdentifier(bool allowSelf = false);
+    [[nodiscard]] std::string resolveTypeName(const std::string& rawName) const;
+    [[nodiscard]] bool isQualifiedTypeStart() const noexcept;
+    [[nodiscard]] std::unique_ptr<ast::Expr> parseConstructorInitializer(const core::TypeRef& type, const core::SourceLocation& location);
 
     std::vector<Token> tokens_;
     std::string filePath_;

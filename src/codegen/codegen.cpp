@@ -124,6 +124,14 @@ namespace dash::codegen
             return tag & ~VariadicRefFlag;
         }
 
+        [[nodiscard]] std::string shortClassName(const std::string &name)
+        {
+            const auto pos = name.rfind("::");
+            if (pos == std::string::npos)
+                return name;
+            return name.substr(pos + 2);
+        }
+
         [[nodiscard]] std::string mangleMethodName(const std::string &className, const std::string &methodName)
         {
             return className + "." + methodName;
@@ -2361,6 +2369,8 @@ namespace dash::codegen
                 return builder_->CreateBitCast(value, llvm::Type::getInt64Ty(context_), "exdt.double");
             core::throwDiagnostic(expr.location, "unsupported operand for exdt during LLVM emission");
         }
+        if (const auto *ctor = dynamic_cast<const ast::ConstructorCallExpr *>(&expr))
+            return emitConstructorValue(*ctor);
         if (const auto *parenExpr = dynamic_cast<const ast::ParenExpr *>(&expr))
         {
             if (parenExpr->preferVariadicCount)
@@ -2430,6 +2440,19 @@ namespace dash::codegen
         }
         if (const auto *builtin = dynamic_cast<const ast::BuiltinDataExpr *>(&expr))
         {
+            auto emitArrayAddress = [&](const ast::Expr &value, const std::string &tmpName) -> llvm::Value *
+            {
+                if (dynamic_cast<const ast::VariableExpr *>(&value) != nullptr ||
+                    dynamic_cast<const ast::MemberExpr *>(&value) != nullptr)
+                {
+                    return emitAddressOf(value);
+                }
+
+                auto *tmp = createEntryAlloca(currentFunction_, arrayType_, tmpName);
+                builder_->CreateStore(emitExpr(value), tmp);
+                return tmp;
+            };
+
             if (builtin->name == "sizeof")
             {
                 if (builtin->arguments.size() != 1)
@@ -2438,27 +2461,35 @@ namespace dash::codegen
                 const auto *arg = builtin->arguments[0].get();
                 const auto argType = arg->inferredType;
 
-                // Array / list semantics requested by you:
-                // - fixed array/list with declared size -> returns fixed size/count
-                // - dynamic list/array -> returns current size/count
-                if (argType.isArray())
-                {
-                    if (argType.hasArraySize)
-                    {
-                        return llvm::ConstantInt::get(
-                            llvm::Type::getInt64Ty(context_),
-                            static_cast<std::uint64_t>(argType.arraySize));
-                    }
-
-                    return emitArraySizeValue(emitAddressOf(*arg));
-                }
-
-                // If it's a variadic value count in scope, you can extend here later if you want.
-                // For now: normal sizeof semantics for scalar/class/string/pointer.
                 if (argType.kind == core::BuiltinTypeKind::Unknown &&
                     dynamic_cast<const ast::NullLiteralExpr *>(arg) != nullptr)
                 {
                     core::throwDiagnostic(expr.location, "#sizeof(null) is not valid");
+                }
+
+                if (argType.isArray())
+                {
+                    const auto elementType = makeArrayElementType(argType);
+                    const auto elementBytes = static_cast<std::uint64_t>(
+                        module_->getDataLayout().getTypeAllocSize(toLLVMType(elementType)));
+
+                    llvm::Value *countValue = nullptr;
+                    if (argType.hasArraySize)
+                    {
+                        countValue = llvm::ConstantInt::get(
+                            llvm::Type::getInt64Ty(context_),
+                            static_cast<std::uint64_t>(argType.arraySize));
+                    }
+                    else
+                    {
+                        auto *arrayAddress = emitArrayAddress(*arg, "builtin.sizeof.tmp");
+                        countValue = emitArraySizeValue(arrayAddress);
+                    }
+
+                    return builder_->CreateMul(
+                        countValue,
+                        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), elementBytes),
+                        "sizeof.array");
                 }
 
                 const auto allocSize = static_cast<std::uint64_t>(
@@ -2468,6 +2499,34 @@ namespace dash::codegen
                     llvm::Type::getInt64Ty(context_),
                     allocSize);
             }
+
+            if (builtin->name == "size")
+            {
+                if (builtin->arguments.size() != 1)
+                    core::throwDiagnostic(expr.location, "#size(...) expects exactly 1 argument");
+
+                const auto *arg = builtin->arguments[0].get();
+                const auto argType = arg->inferredType;
+
+                if (argType.isArray())
+                {
+                    auto *arrayAddress = emitArrayAddress(*arg, "builtin.size.tmp");
+                    if (argType.hasArraySize)
+                        return emitArrayCapacityValue(arrayAddress);
+                    return emitArraySizeValue(arrayAddress);
+                }
+
+                if (const auto *var = dynamic_cast<const ast::VariableExpr *>(arg))
+                {
+                    auto *sizeAlloca = lookupLocal(var->name + "_size", expr.location);
+                    return builder_->CreateLoad(sizeAlloca->getAllocatedType(), sizeAlloca, var->name + ".builtin.size");
+                }
+
+                core::throwDiagnostic(expr.location, "#size(...) requires an array/list or variadic value");
+            }
+
+            if (builtin->name == "type")
+                core::throwDiagnostic(expr.location, "#type(...) is only valid in type positions");
 
             core::throwDiagnostic(expr.location, "unknown builtin data expression: #" + builtin->name);
         }
@@ -3551,6 +3610,8 @@ namespace dash::codegen
         }
         case core::BuiltinTypeKind::Array:
             return arrayType_;
+        case core::BuiltinTypeKind::TypeQuery:
+            core::throwDiagnostic(core::SourceLocation{}, "unresolved #type(...) reached LLVM lowering");
         case core::BuiltinTypeKind::Unknown:
             return llvm::Type::getInt64Ty(context_);
         }
@@ -3840,6 +3901,92 @@ namespace dash::codegen
         result = builder_->CreateInsertValue(result, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), targetType.hasArraySize ? targetType.arraySize : count), {2});
         result = builder_->CreateInsertValue(result, llvm::ConstantInt::get(llvm::Type::getInt1Ty(context_), 1), {3});
         return result;
+    }
+
+    llvm::Value *CodeGenerator::emitConstructorValue(const ast::ConstructorCallExpr &expr)
+    {
+        const auto &layout = classes_.at(expr.targetType.name);
+        const auto ctorName = shortClassName(expr.targetType.name);
+        const auto mangled = mangleMethodName(expr.targetType.name, ctorName);
+
+        llvm::Value *value = emitDefaultClassValue(expr.targetType);
+
+        if (!functions_.contains(mangled))
+        {
+            if (!expr.arguments.empty())
+                core::throwDiagnostic(expr.location, "constructor '" + ctorName + "' not found for class '" + expr.targetType.name + "'");
+            return value;
+        }
+
+        auto *temp = createEntryAlloca(currentFunction_, layout.type, ctorName + ".ctor.tmp");
+        builder_->CreateStore(value, temp);
+
+        auto *callee = functions_.at(mangled);
+        const auto *decl = layout.methods.at(ctorName);
+
+        std::vector<llvm::Value *> args;
+        args.push_back(temp);
+
+        const bool variadic = !decl->parameters.empty() && decl->parameters.back().isVariadic;
+        const std::size_t fixedCount = variadic ? decl->parameters.size() - 1 : decl->parameters.size();
+
+        for (std::size_t i = 0; i < fixedCount; ++i)
+        {
+            auto *arg = emitExpr(*expr.arguments[i]);
+            arg = castValue(arg, expr.arguments[i]->inferredType, decl->parameters[i].type);
+            args.push_back(arg);
+        }
+
+        if (variadic)
+        {
+            std::vector<llvm::Value *> packed;
+            for (std::size_t i = fixedCount; i < expr.arguments.size(); ++i)
+            {
+                llvm::Value *v = emitExpr(*expr.arguments[i]);
+                packed.push_back(emitRuntimeVariadicTag(*expr.arguments[i]));
+
+                if (v->getType()->isIntegerTy())
+                    v = builder_->CreateIntCast(v, llvm::Type::getInt64Ty(context_), false);
+                else if (v->getType()->isPointerTy())
+                    v = builder_->CreatePtrToInt(v, llvm::Type::getInt64Ty(context_));
+                else if (v->getType()->isDoubleTy())
+                    v = builder_->CreateBitCast(v, llvm::Type::getInt64Ty(context_));
+
+                packed.push_back(v);
+            }
+
+            args.push_back(llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), packed.size() / 2));
+
+            if (packed.empty())
+            {
+                args.push_back(llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(llvm::PointerType::get(context_, 0))));
+            }
+            else
+            {
+                auto *arrayType = llvm::ArrayType::get(llvm::Type::getInt64Ty(context_), packed.size());
+                auto *stackBuffer = createEntryAlloca(currentFunction_, arrayType, ctorName + ".ctor.vargs");
+                auto *typedBase = builder_->CreateInBoundsGEP(
+                    arrayType,
+                    stackBuffer,
+                    {llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0),
+                     llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0)});
+
+                for (std::size_t i = 0; i < packed.size(); ++i)
+                {
+                    auto *ptr = builder_->CreateGEP(
+                        llvm::Type::getInt64Ty(context_),
+                        typedBase,
+                        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), i));
+                    builder_->CreateStore(packed[i], ptr);
+                }
+
+                args.push_back(builder_->CreatePointerCast(typedBase, llvm::PointerType::get(context_, 0)));
+            }
+        }
+
+        builder_->CreateCall(callee, args);
+        return builder_->CreateLoad(layout.type, temp, ctorName + ".ctor.value");
     }
 
     llvm::Value *CodeGenerator::emitDefaultClassValue(const core::TypeRef &targetType)
